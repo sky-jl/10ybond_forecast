@@ -1,0 +1,24 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+
+# Environment variable files
+.env
+.env.local
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp

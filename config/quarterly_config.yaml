@@ -1,0 +1,79 @@
+# ============================================================
+# Bond Yield Forecast — Quarterly Configuration
+# Edit this file each quarter before running main.py
+# ============================================================
+
+quarter: "Q2 2026"
+run_date: "2026-05-27"
+
+# API Keys
+# You can also set these as environment variables:
+#   FRED_API_KEY and ANTHROPIC_API_KEY
+fred_api_key: ""        # Leave blank — loaded from .env or FRED_API_KEY env var
+anthropic_api_key: ""   # Leave blank — loaded from .env or ANTHROPIC_API_KEY env var
+
+# ============================================================
+# FORECAST TARGETS
+# ============================================================
+us_10y:
+  target: 4.2          # Long-term target in percent
+  horizon: "long-term (5–10 year)"
+
+canada_10y:
+  target: 4.0          # Long-term target in percent
+  horizon: "long-term (5–10 year)"
+
+# Long-run Fed Funds rate assumption (FOMC SEP long-run dot)
+long_run_fed_funds: 3.125
+
+# Long-run Bank of Canada overnight rate assumption
+long_run_boc_rate: 2.75
+
+# FOMC SEP long-run real GDP growth and PCE inflation target
+# Used in Framework 3: implied 10Y = real_gdp_growth + pce_inflation
+long_run_real_gdp_growth: 2.15
+long_run_pce_inflation: 2.00
+
+# ============================================================
+# MACRO THEMES
+# These drive the AI-drafted Forecasting Rationale section.
+# Update each quarter to reflect the current narrative.
+# ============================================================
+macro_themes:
+  - "Fed holding rates higher-for-longer amid sticky services inflation"
+  - "Fiscal deficit concerns and elevated Treasury supply adding to term premium"
+  - "Canada-US spread compression as BoC cuts ahead of Fed, narrowing policy rate differential"
+  - "Gradual disinflation trend intact but last-mile inflation proving persistent"
+  - "Strong labour markets supporting neutral rate estimates above pre-pandemic levels"
+
+# ============================================================
+# MEDIUM-TERM RISKS (3–5 Years)
+# Add or remove bullets as appropriate each quarter.
+# ============================================================
+medium_term_risks:
+  upside:   # Risks that would push yields HIGHER than forecast
+    - "Re-acceleration of inflation forces the Fed to resume hiking, pushing short rates above current path"
+    - "US debt supply shock if fiscal consolidation fails, widening term premium by 30–50 bps"
+    - "Geopolitical fragmentation accelerates deglobalization, sustaining goods inflation"
+    - "Neutral rate (r*) re-estimation higher as AI investment boosts capital demand"
+  downside:   # Risks that would push yields LOWER than forecast
+    - "Recession triggers aggressive Fed cutting cycle, flattening the path of short rates"
+    - "AI-driven productivity boom leads to disinflationary growth, compressing risk-free rates"
+    - "Credit event or financial stress triggers flight-to-quality demand for Treasuries"
+    - "Faster-than-expected disinflation allows earlier and deeper Fed easing"
+
+# ============================================================
+# LONG-TERM RISKS (5–10 Years)
+# Structural, secular factors on a decade horizon.
+# ============================================================
+long_term_risks:
+  upside:   # Structural forces pushing yields permanently higher
+    - "Structural fiscal deterioration — defence spending, entitlements, and interest costs lift r*"
+    - "Deglobalization and supply chain reshoring sustain a higher inflation equilibrium"
+    - "Global reserve diversification away from USD reduces demand for US Treasuries"
+    - "Climate transition capex creates sustained demand for long-duration capital"
+  downside:   # Structural forces pushing yields permanently lower
+    - "Demographics and population aging suppress long-run consumption and investment"
+    - "Debt deflation spiral if fiscal sustainability concerns materialize in a disorderly way"
+    - "Persistent technological deflation from AI compresses inflation expectations durably"
+    - "Global savings glut re-emerges as emerging market surplus economies expand"
