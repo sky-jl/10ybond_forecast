@@ -139,6 +139,7 @@ MONTHLY_FRED_MACRO = {
     "unrate": "UNRATE",          # unemployment rate (monthly)
     "nrou": "NROU",              # CBO natural rate of unemployment (quarterly)
     "deficit_gdp": "FYFSGDA188S",  # federal surplus/deficit % GDP (annual)
+    "boc_rate_fred": "IRSTCB01CAM156N",  # OECD: Canada central bank rate (back-fills boc_rate)
 }
 
 MONTHLY_BOC_MARKET = {
@@ -249,6 +250,10 @@ def finalize_monthly_dataset(df: pd.DataFrame) -> pd.DataFrame:
         df["boc_rate"] = df["boc_rate"].combine_first(df["boc_rate_hist"]) if "boc_rate" in df \
             else df["boc_rate_hist"]
         df = df.drop(columns="boc_rate_hist")
+    if "boc_rate_fred" in df:
+        df["boc_rate"] = df["boc_rate"].combine_first(df["boc_rate_fred"]) if "boc_rate" in df \
+            else df["boc_rate_fred"]
+        df = df.drop(columns="boc_rate_fred")
     if "boc_rate" in df:
         df["boc_rate"] = df["boc_rate"].ffill()  # policy rate only changes on decision dates
     df = df.dropna(subset=["us_10y", "fed_funds"], how="any")
