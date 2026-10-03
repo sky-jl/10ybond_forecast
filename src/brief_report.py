@@ -164,8 +164,10 @@ def build_context(result, config: dict, backtest_summary: pd.DataFrame | None = 
         "term_premium_fiscal": _round({k: v for k, v in (result.params.get("term_premium", {})
                                                           .get("fiscal_fair_value") or {}).items()}),
         "term_premium_addons_bps": result.params.get("term_premium", {}).get("addons_bps", {}),
-        "fiscal_premium": _round(result.params.get("fiscal", {})),
-        "fiscal_premium_by_scenario_bps": result.params.get("fiscal_by_scenario_bps", {}),
+        "fiscal_premium": {k: (round(v) if k.endswith("_bps") and isinstance(v, (int, float)) else v)
+                           for k, v in _round(result.params.get("fiscal", {})).items()},
+        "fiscal_premium_by_scenario_bps": {k: round(v) for k, v in
+                                           (result.params.get("fiscal_by_scenario_bps") or {}).items()},
         "macro_themes": config.get("macro_themes", []),
         "macro_research": config.get("macro_research") or {},
         "research_notes": (config.get("macro_research_notes") or "")[:8000],
@@ -410,11 +412,12 @@ def chart_macro(result) -> io.BytesIO | None:
     fig, axes = plt.subplots(1, 2, figsize=(7.4, 2.2))
     ax = axes[0]
     if fit is not None:
-        fitted = fit["fitted"]
+        # 12-month average: annual deficit data and volatility make the raw fit jumpy
+        fitted = fit["fitted"].rolling(12, min_periods=6).mean()
         fitted = fitted[fitted.index >= fitted.index[-1] - pd.DateOffset(years=12)]
         actual = h["us_tp"].reindex(fitted.index)
         ax.plot(actual.index, actual, color="#0b0b0b", lw=1.3, label="Term premium")
-        ax.plot(fitted.index, fitted, color=SERIES[1], lw=1.6, label="Historical fiscal relationship")
+        ax.plot(fitted.index, fitted, color=SERIES[1], lw=1.6, label="Historical fiscal relationship (12m avg)")
         ax.fill_between(fitted.index, fitted, actual, where=actual > fitted, color=SERIES[1], alpha=0.15, lw=0)
         ax.set_title(f"Term premium vs fiscal relationship (gap {fit['residual_now_bps']:+.0f} bp)",
                      fontsize=8.5, loc="left", fontweight="bold")

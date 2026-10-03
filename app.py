@@ -575,12 +575,12 @@ with tabs[8]:
         m2.metric("Historical-relationship value", fmt_pct(tp_fit["fair_value_now"]))
         m3.metric("Gap (excess risk premium)", f"{tp_fit['residual_now_bps']:+.0f} bps", delta_color="off")
         m4.metric("R²", f"{tp_fit['r2']:.2f}", help=f"{tp_fit['n']} months, {tp_fit['sample']}")
-        fitted = tp_fit["fitted"]
+        fitted = tp_fit["fitted"].rolling(12, min_periods=6).mean()
         actual = res.history["us_tp"].reindex(fitted.index)
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=actual.index, y=actual, name="Term premium (actual)",
                                  line=dict(color=INK, width=1.6), hovertemplate="%{y:.2f}%"))
-        fig.add_trace(go.Scatter(x=fitted.index, y=fitted, name="Historical relationship (fitted)",
+        fig.add_trace(go.Scatter(x=fitted.index, y=fitted, name="Historical relationship (fitted, 12m avg)",
                                  line=dict(color=SLOTS[1], width=2), hovertemplate="%{y:.2f}%"))
         st.plotly_chart(base_layout(fig, "Term premium vs historical fiscal relationship", 340), theme="streamlit")
         coef_rows = [{"Driver": DRIVER_LABELS.get(c, c), "Latest": f"{tp_fit['latest_drivers'][c]:.1f}",
