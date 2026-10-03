@@ -9,7 +9,7 @@ import anthropic
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-opus-4-7"
+MODEL = "claude-opus-5-5"
 
 SYSTEM_PROMPT = """You are a senior quantitative economist drafting a long-term bond yield forecast
 report. Write in a professional, concise style suitable for a central bank or financial institution
@@ -18,13 +18,20 @@ from the data provided. Do not pad with generic statements."""
 
 
 def _call_claude(client: anthropic.Anthropic, prompt: str) -> str:
-    resp = client.messages.create(
+    # Thinking is always on for this model, so the first content block can be a thinking
+    # block: pick the text blocks explicitly, and leave room in max_tokens for thinking.
+    resp = client.beta.messages.create(
         model=MODEL,
-        max_tokens=1500,
+        max_tokens=16000,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        output_config={"effort": "high"},
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
     )
-    return resp.content[0].text.strip()
+    if resp.stop_reason == "refusal":
+        return "[Commentary not generated — model declined; please draft manually]"
+    return "".join(b.text for b in resp.content if b.type == "text").strip()
 
 
 def _fmt_metrics(metrics: dict) -> str:

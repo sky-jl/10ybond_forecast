@@ -39,6 +39,8 @@ def main() -> None:
     ap.add_argument("--data-file", help="Monthly dataset CSV (skips downloading)")
     ap.add_argument("--synthetic", action="store_true", help="Use synthetic data (offline demo/testing)")
     ap.add_argument("--backtest", action="store_true", help="Run the out-of-sample backtest")
+    ap.add_argument("--pdf", action="store_true",
+                    help="Write a concise PDF brief (commentary by Claude if ANTHROPIC_API_KEY is set)")
     args = ap.parse_args()
 
     with open(args.config) as f:
@@ -68,6 +70,13 @@ def main() -> None:
         print("\nBacktest (RMSE in pp; rmse_vs_rw < 1 beats random walk):")
         print(s[["target", "h", "model", "n", "rmse", "rmse_vs_rw", "dm_pvalue_vs_rw"]].round(3).to_string(index=False))
     print("\nCharts:", *charts.values(), sep="\n  ")
+    if args.pdf:
+        from brief_report import generate_brief
+        bt = result.backtest["summary"] if result.backtest else None
+        pdf, commentary = generate_brief(result, config, bt)
+        pdf_path = out / f"10Y_Outlook_{str(config.get('quarter', '')).replace(' ', '_')}.pdf"
+        pdf_path.write_bytes(pdf)
+        print(f"\nPDF brief: {pdf_path}  ({commentary.get('_source', '')})")
 
 
 if __name__ == "__main__":

@@ -24,6 +24,10 @@ import yaml
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv(ROOT / ".env")  # ANTHROPIC_API_KEY for the PDF report commentary
+
 from data_fetcher import load_monthly_dataset  # noqa: E402
 from forecasting import run_forecast  # noqa: E402
 from forecasting.backtest import run_backtest  # noqa: E402
@@ -366,7 +370,8 @@ def policy_chart(col: str, label: str) -> go.Figure:
     return base_layout(fig, label, height=360)
 
 
-tabs = st.tabs(["US 10Y", "Canada 10Y", "Decomposition", "Policy paths", "Tables", "Backtest", "Export config"])
+tabs = st.tabs(["US 10Y", "Canada 10Y", "Decomposition", "Policy paths", "Tables", "Backtest",
+                "PDF report", "Export config"])
 with tabs[0]:
     st.plotly_chart(fan_chart("us_10y", "US 10Y Treasury"), use_container_width=True, theme="streamlit")
 with tabs[1]:
@@ -422,6 +427,36 @@ with tabs[5]:
             {"rmse": "{:.3f}", "mae": "{:.3f}", "bias": "{:+.3f}", "rmse_vs_rw": "{:.3f}",
              "hit_rate": "{:.2f}", "dm_pvalue_vs_rw": "{:.2f}"}), use_container_width=True, hide_index=True)
 with tabs[6]:
+    import os
+
+    from brief_report import MODEL, generate_brief
+
+    st.markdown("A concise **1–2 page PDF brief** of the current settings: headline call, KPI table, "
+                "fan charts, quarterly table, US decomposition, policy scenarios, Canada view, risks "
+                "and conclusion.")
+    has_key = bool(os.environ.get("ANTHROPIC_API_KEY") or base_cfg.get("anthropic_api_key"))
+    use_ai = st.toggle(f"Draft the commentary with Claude (`{MODEL}`)", value=has_key, disabled=not has_key,
+                       help="Needs ANTHROPIC_API_KEY in .env. Off = factual template text from the numbers.")
+    if not has_key:
+        st.caption("No ANTHROPIC_API_KEY found in `.env` — the PDF will use template commentary.")
+    include_bt = "bt" in st.session_state
+    st.caption("Backtest results will be included." if include_bt
+               else "Tip: run the Backtest tab first to include its accuracy summary.")
+    if st.button("Generate PDF report", type="primary"):
+        with st.spinner("Drafting commentary and building the PDF…" if use_ai else "Building the PDF…"):
+            pdf, commentary = generate_brief(res, cfg, st.session_state.get("bt"), use_ai=use_ai)
+        st.session_state["pdf"] = pdf
+        st.session_state["pdf_commentary"] = commentary
+    if "pdf" in st.session_state:
+        slug = str(cfg.get("quarter", "")).replace(" ", "_")
+        st.download_button("⬇ Download PDF", st.session_state["pdf"], f"10Y_Outlook_{slug}.pdf",
+                           "application/pdf")
+        com = st.session_state["pdf_commentary"]
+        st.caption(com.get("_source", ""))
+        with st.expander("Preview commentary", expanded=True):
+            st.markdown(f"**{com['headline']}**\n\n{com['summary']}")
+            st.markdown("**Conclusion:** " + com["conclusion"])
+with tabs[7]:
     st.markdown("Copy this into the `forecast:` section of `config/quarterly_config.yaml` to make these "
                 "settings the defaults for `forecast.py` and the Word report.")
     out = {k: v for k, v in f.items() if k not in ("enabled",)}

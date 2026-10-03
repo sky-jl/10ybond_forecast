@@ -26,6 +26,11 @@ instantly. The **Backtest** tab runs the out-of-sample test; **Export config** g
 paste into `config/quarterly_config.yaml` so `forecast.py` / `main.py` use the same settings.
 It reads the dataset cached by `python forecast.py` (run that first; or toggle synthetic demo data).
 
+The **PDF report** tab (or `python forecast.py --pdf`) writes a concise 1–2 page brief: headline
+call, KPI table, US/Canada fan charts, quarterly table, decomposition, policy scenarios, risks and
+conclusion. Commentary is drafted by Claude (`claude-opus-5-5`) when `ANTHROPIC_API_KEY` is in
+`.env`; otherwise a factual template is used. Always review before sharing.
+
 ## 2-year forecast model (`src/forecasting/`)
 
 Monthly model, h = 1…24 months, reported as quarterly averages.
