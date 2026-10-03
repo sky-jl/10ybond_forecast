@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from data_fetcher import build_dataset
 from analysis import run_analysis
-from charts import generate_all_charts
+from charts import generate_all_charts, generate_forecast_charts
 from commentary import generate_all_commentary
 from report_builder import build_report
 
@@ -73,6 +73,10 @@ def main() -> None:
                         help="Directory for the generated report and charts")
     parser.add_argument("--no-open", action="store_true",
                         help="Do not auto-open the report after generation")
+    parser.add_argument("--skip-forecast", action="store_true",
+                        help="Skip the 2-year forecast model (Section 6)")
+    parser.add_argument("--forecast-data-file",
+                        help="Monthly dataset CSV for the forecast model (skips downloading)")
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -94,9 +98,25 @@ def main() -> None:
     # Pull out df from metrics to keep it separate
     df_enriched = metrics.pop("_df")
 
+    # Step 2b — 2-year forecast model (optional)
+    fcfg = config.get("forecast", {}) or {}
+    forecast_result = None
+    if fcfg.get("enabled") and not args.skip_forecast:
+        from forecasting.pipeline import attach_to_metrics, load_dataset, run_pipeline
+        logger.info("Step 2b     Running 2-year forecast model...")
+        forecast_dir = output_dir / "forecast"
+        monthly = load_dataset(config, args.forecast_data_file,
+                               cache_path=forecast_dir / "monthly_dataset.csv")
+        forecast_result = run_pipeline(
+            monthly, config, forecast_dir,
+            backtest=bool((fcfg.get("backtest") or {}).get("include_in_report", True)))
+        attach_to_metrics(forecast_result, metrics)
+
     # Step 3 — Charts
     logger.info("Step 3/5  Generating charts...")
     chart_paths = generate_all_charts(df_enriched, metrics, chart_dir, config)
+    if forecast_result is not None:
+        chart_paths.update(generate_forecast_charts(forecast_result, chart_dir))
     for name, path in chart_paths.items():
         logger.info("  Saved: %s", path)
 

@@ -51,7 +51,7 @@ Write 6–8 bullet points covering:
 - Key macro drivers of US yield movements last quarter (Fed policy, inflation prints, growth data,
   fiscal/supply dynamics, geopolitical factors)
 - Where US 10Y sits relative to its 5Y ({metrics['us_10y_mean_5y']:.2f}%) and 10Y ({metrics['us_10y_mean_10y']:.2f}%) historical averages
-- Current ACM term premium context ({metrics['acm_tp_current']:.2f}% at {metrics['acm_tp_pct_rank_20y']:.0f}th percentile of 20Y history)
+- Current Kim-Wright term premium context ({metrics['acm_tp_current']:.2f}% at {metrics['acm_tp_pct_rank_20y']:.0f}th percentile of 20Y history)
 
 Begin each bullet with "•". No headers within this section. Mark the section:
 [DRAFT — please review]
@@ -89,10 +89,11 @@ def draft_sources(metrics: dict, config: dict) -> str:
         "• Federal Reserve Economic Data (FRED) — fred.stlouisfed.org",
         "  - DGS10: US 10-Year Treasury Constant Maturity Rate (daily)",
         "  - DFF: Federal Funds Effective Rate (daily)",
-        "  - ACMTP10: Adrian, Crump & Moench (ACM) 10-Year Term Premium (daily)",
+        "  - THREEFYTP10: Kim-Wright 10-Year Term Premium (daily)",
         "  - T10YIE: 10-Year Breakeven Inflation Rate (daily)",
         "• Bank of Canada VALET API — bankofcanada.ca/valet",
-        "  - V39056: Government of Canada 10-Year Benchmark Bond Yield (daily)",
+        "  - BD.CDN.10YR.DQ.YLD: Government of Canada 10-Year Benchmark Bond Yield (daily)",
+        "  - B114039: Bank of Canada overnight target rate",
         "",
         "**Analytical References:**",
         "• Adrian, T., Crump, R. K., & Moench, E. (2013). 'Pricing the Term Structure with "
@@ -102,6 +103,20 @@ def draft_sources(metrics: dict, config: dict) -> str:
         "• Bank of Canada — Monetary Policy Report (MPR), most recent edition.",
         f"• Report generated: {config['run_date']} for {quarter}.",
     ]
+    if metrics.get("_forecast_summary"):
+        lines[lines.index("**Analytical References:**"):lines.index("**Analytical References:**")] = [
+            "**2-Year Forecast Model Inputs (monthly):**",
+            "• FRED — DGS3MO/DGS1/DGS2/DGS5/DGS7/DGS10/DGS30 (Treasury curve), DFII10 (TIPS real yield),",
+            "  PCEPILFE (core PCE), UNRATE, NROU (CBO NAIRU), FYFSGDA188S (federal deficit % GDP)",
+            "• Federal Reserve Bank of New York — ACM term structure decomposition (ACMTP10, ACMRNY10)",
+            "• Bank of Canada VALET — BD.CDN.2YR.DQ.YLD (GoC 2-Year benchmark yield)",
+            "• Policy-rate scenarios and probabilities: forecaster judgment (see Section 6)",
+            "",
+        ]
+        lines.append("• Diebold, F. X. & Li, C. (2006). 'Forecasting the Term Structure of Government "
+                     "Bond Yields.' Journal of Econometrics (benchmark model).")
+        lines.append("• Kim, D. H. & Wright, J. H. (2005). 'An Arbitrage-Free Three-Factor Term Structure "
+                     "Model.' Federal Reserve Board FEDS 2005-33.")
     return "\n".join(lines)
 
 
@@ -130,7 +145,7 @@ The 10Y–FFR spread is used directly; term premium is already embedded in the h
 - 10Y avg 10Y–FFR spread: {metrics['spread_10y_ffr_mean_10y']:+.2f}pp → implied 10Y: {m['implied_10y_using_10y_avg_spread']:.2f}%
 - 20Y avg 10Y–FFR spread: {metrics['spread_10y_ffr_mean_20y']:+.2f}pp → implied 10Y: {m['implied_10y_using_20y_avg_spread']:.2f}%
 
-FRAMEWORK 2 — ACM decomposition (expected short rate + explicit term premium):
+FRAMEWORK 2 — Term-premium decomposition (Kim-Wright) (expected short rate + explicit term premium):
 10Y yield = expected avg short rate converging to long-run FFR + term premium.
 - Long-run FFR ({m['long_run_fed_funds']}%) + 10Y avg TP ({metrics['acm_tp_mean_10y']:.2f}%) → implied 10Y: {m['implied_10y_acm_10y_avg_tp']:.2f}%
 - Long-run FFR ({m['long_run_fed_funds']}%) + 20Y avg TP ({metrics['acm_tp_mean_20y']:.2f}%) → implied 10Y: {m['implied_10y_acm_20y_avg_tp']:.2f}%
@@ -153,7 +168,7 @@ MACRO THEMES DRIVING THE VIEW:
 
 Write 8–10 bullet points covering:
 - Framework 1 derivation: show the arithmetic for the spread-based implied range
-- Framework 2 derivation: show how ACM decomposition gives a consistent cross-check (and clarify it should not be stacked on top of Framework 1)
+- Framework 2 derivation: show how the term-premium decomposition gives a consistent cross-check (and clarify it should not be stacked on top of Framework 1)
 - Framework 3 derivation: GDP + inflation as the classical anchor, and why it converges with Frameworks 1 and 2
 - Why {us_target}% sits within / at the intersection of the three implied ranges
 - Key structural factors (neutral rate, fiscal, inflation regime) supporting the long-term anchor
@@ -223,7 +238,7 @@ Draft the **Medium-Term Risks (3–5 Year)** section for a {quarter} {country_la
 
 CURRENT CONTEXT:
 - {country_label}: {current:.2f}% | Forecast target: {target}%
-- ACM term premium: {metrics['acm_tp_current']:.2f}% ({metrics['acm_tp_pct_rank_20y']:.0f}th pct)
+- Kim-Wright term premium: {metrics['acm_tp_current']:.2f}% ({metrics['acm_tp_pct_rank_20y']:.0f}th pct)
 - 10Y breakeven inflation: {metrics['us_10y_bei_current']:.2f}%
 
 USER-IDENTIFIED UPSIDE RISKS (yields higher than forecast):
@@ -262,7 +277,7 @@ decade-long horizon — beyond the medium-term forecast.
 CURRENT CONTEXT:
 - {country_label} target: {target}%
 - 20Y historical avg: {mean_20y:.2f}%
-- Current ACM term premium: {metrics['acm_tp_current']:.2f}% vs 20Y avg: {metrics['acm_tp_mean_20y']:.2f}%
+- Current Kim-Wright term premium: {metrics['acm_tp_current']:.2f}% vs 20Y avg: {metrics['acm_tp_mean_20y']:.2f}%
 
 USER-IDENTIFIED UPSIDE RISKS (yields structurally higher):
 {upside}
@@ -275,6 +290,42 @@ Write 6–8 bullet points framed specifically for the {country_label}. Structure
 - Next 3–4 bullets: structural downside risks
 
 Begin each bullet with "↑ [Upside]" or "↓ [Downside]" as appropriate. Mark the section:
+[DRAFT — please review]
+"""
+    return _call_claude(client, prompt)
+
+
+def draft_forecast_path(
+    client: anthropic.Anthropic, metrics: dict, config: dict, country: str
+) -> str:
+    """Commentary on the 2-year model forecast (scenarios, decomposition, backtest)."""
+    summary = metrics["_forecast_summary"]
+    quarter = config["quarter"]
+    label = "US 10-Year Treasury" if country == "us" else "Canada 10-Year Government Bond"
+    focus = (
+        "- Decomposition of the central path into expected short-rate (policy path) vs term premium,\n"
+        "  and which component drives the change over the horizon"
+        if country == "us" else
+        "- Canada 10Y = US 10Y + Canada–US spread: how the BoC–Fed policy differential drives the\n"
+        "  spread path, and the US–Canada yield beta"
+    )
+    prompt = f"""
+Draft the **Two-Year Forecast Path** commentary for a {quarter} {label} yield forecast.
+
+MODEL OUTPUT (monthly model, quarterly averages; yields in %):
+{json.dumps(summary, indent=2, default=float)}
+
+BACKTEST SUMMARY (RMSE in pp; rmse_vs_rw < 1 means the model beat a random walk):
+{json.dumps(metrics.get("_backtest_summary", "not run"), indent=2, default=float)}
+
+Write 6–8 bullet points covering:
+- Probability-weighted path for the {label} over the next 8 quarters, with the 10–90th percentile range at the end
+- How the scenarios (and their probabilities) differ and what policy-rate assumptions drive them
+{focus}
+- Where the forecaster's judgmental overlay (if non-zero) moves the result vs the pure model
+- Honest note on forecast accuracy from the backtest (10Y yields are hard to forecast vs a random walk)
+
+Begin each bullet with "•". No headers. Mark the section:
 [DRAFT — please review]
 """
     return _call_claude(client, prompt)
@@ -306,6 +357,10 @@ def generate_all_commentary(metrics: dict, config: dict) -> dict[str, dict[str, 
 
         logger.info("    Section 5: Long-term risks")
         sections["long_term_risks"] = draft_long_term_risks(client, metrics, config, country)
+
+        if metrics.get("_forecast_summary"):
+            logger.info("    Section 6: Two-year forecast path")
+            sections["forecast"] = draft_forecast_path(client, metrics, config, country)
 
         result[country] = sections
 

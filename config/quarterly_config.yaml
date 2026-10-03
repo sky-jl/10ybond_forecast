@@ -77,3 +77,101 @@ long_term_risks:
     - "Debt deflation spiral if fiscal sustainability concerns materialize in a disorderly way"
     - "Persistent technological deflation from AI compresses inflation expectations durably"
     - "Global savings glut re-emerges as emerging market surplus economies expand"
+
+# ============================================================
+# 2-YEAR FORECAST MODEL (src/forecasting) — 主观输入 / user views
+# 10Y = 预期短端利率均值 (expectations) + 期限溢价 (term premium) + basis + overlay
+# Canada 10Y = US 10Y + Canada–US spread (driven by BoC − Fed policy differential)
+# Period keys accept "2027Q2", "2027-06" or "2027-06-30"; values between anchors are
+# linearly interpolated monthly, and the path starts from the latest observed value.
+# ⚠️ All numbers below are EXAMPLES — update every quarter.
+# ============================================================
+forecast:
+  enabled: true
+  horizon_months: 24
+
+  # ---- 1. Policy-rate scenarios (最重要的主观输入) --------------------------
+  # fed_funds / boc_rate: expected policy rate (%) at the END of each period.
+  # boc_rate may be omitted → derived from the BoC model path + Fed pass-through.
+  # term_premium_target (optional, %): scenario-specific TP destination, e.g. a fiscal-stress
+  #   scenario with a higher TP. Omit to use the global term_premium setting below.
+  # probability: weights are rescaled to sum to 1 (together with model_scenario).
+  scenarios:
+    - name: "Base"
+      probability: 0.55
+      fed_funds: {"2026Q4": 3.375, "2027Q2": 3.125, "2027Q4": 3.125, "2028Q3": 3.125}
+      boc_rate:  {"2026Q4": 2.25,  "2027Q2": 2.25,  "2027Q4": 2.50,  "2028Q3": 2.75}
+    - name: "Hawkish"
+      probability: 0.20
+      fed_funds: {"2026Q4": 3.625, "2027Q2": 3.875, "2027Q4": 3.875, "2028Q3": 3.625}
+      boc_rate:  {"2026Q4": 2.50,  "2027Q2": 2.75,  "2027Q4": 3.00,  "2028Q3": 3.00}
+      term_premium_target: 1.25
+    - name: "Dovish"
+      probability: 0.15
+      fed_funds: {"2026Q4": 3.125, "2027Q2": 2.375, "2027Q4": 2.125, "2028Q3": 2.375}
+      boc_rate:  {"2026Q4": 2.00,  "2027Q2": 1.75,  "2027Q4": 1.75,  "2028Q3": 2.00}
+
+  # Endogenous Taylor-rule scenario (objective cross-check). probability 0 = shown in
+  # params only, not part of the forecast.
+  model_scenario:
+    include: true
+    name: "Model (Taylor rule)"
+    probability: 0.10
+
+  # Taylor rule for the model scenario (rho = monthly inertia; null = estimate from data)
+  taylor_rule:
+    r_star: 1.0                 # real neutral rate (%)
+    inflation_target: 2.0
+    a_pi: 0.5
+    a_gap: 1.0
+    okun: 2.0
+    rho: null
+    inflation_halflife: 12      # months for core PCE gap to halve (if no path given)
+    unemployment_halflife: 18
+    # inflation_path: {"2027Q2": 2.6, "2027Q4": 2.3}     # optional core PCE YoY view
+    # unemployment_path: {"2027Q2": 4.6}                 # optional unemployment view
+
+  # Share of Fed moves passed through to the BoC when boc_rate is not specified
+  boc_fed_passthrough: 0.5
+
+  # ---- 2. Expectations component ------------------------------------------------
+  # Nominal neutral rates: null → long_run_fed_funds / long_run_boc_rate above
+  neutral_fed_funds: null
+  neutral_boc_rate: null
+  expectations:
+    convergence_halflife_months: 36   # how fast short rates converge to neutral beyond the horizon
+    basis_halflife_months: 12         # how fast today's model-vs-market gap fades
+
+  # ---- 3. Term premium -----------------------------------------------------------
+  term_premium:
+    target: "historical"        # number (e.g. 0.75) = subjective view | "historical" | "regression"
+    historical_window_years: 10
+    halflife_months: null       # null = estimated AR(1) speed
+    drivers:                    # used when target = "regression" (null/omitted → latest value)
+      # deficit_gdp: -6.5       # federal deficit % GDP (negative = deficit)
+      # us_10y_rvol_12m: 7.0    # realised 10Y volatility, bps/day
+
+  # ---- 4. Canada–US spread -------------------------------------------------------
+  canada_spread:
+    target: "model"             # number (pp, e.g. -0.60) = subjective view | "model"
+    halflife_months: null       # used only with a numeric target
+    sample_start: "2000-01-01"
+
+  # ---- 5. Judgmental overlay (final add-on, bps; 0 at forecast start) -------------
+  overlay:
+    us_10y_bps: {}              # e.g. {"2027Q2": 10, "2028Q3": 0}
+    canada_10y_bps: {}
+
+  # ---- 6. Uncertainty bands ------------------------------------------------------
+  uncertainty:
+    n_sims: 5000
+    block_months: 6
+    sample_years: 15            # history used for bootstrapped monthly changes
+    scale: 1.0                  # widen (>1) / narrow (<1) the bands
+    seed: 42
+
+  # ---- 7. Backtest -----------------------------------------------------------------
+  backtest:
+    start: "2005-01-31"
+    trailing_neutral_years: 10
+    include_in_report: true

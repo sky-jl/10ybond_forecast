@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 FRED_SERIES = {
     "us_10y": "DGS10",          # US 10Y Treasury yield (daily)
     "fed_funds": "DFF",          # Fed Funds Effective Rate (daily)
+    # NOTE: column kept as "acm_tp" for backward compatibility, but THREEFYTP10 is the
+    # Kim-Wright (Fed Board) term premium, not ACM. True ACM comes from fetch_acm().
     "acm_tp": "THREEFYTP10",     # 10Y term premium, Kim-Wright model (daily)
     "us_10y_bei": "T10YIE",      # 10Y Breakeven Inflation (daily)
 }
@@ -110,3 +112,147 @@ def last_quarter_window(df: pd.DataFrame) -> tuple[pd.Timestamp, pd.Timestamp]:
     qs = max(qs, df.index.min())
     qe = min(qe, df.index.max())
     return qs, qe
+
+
+# ============================================================
+# Monthly dataset for the 2-year forecast model (src/forecasting)
+# ============================================================
+
+# Market series: monthly average of daily observations
+MONTHLY_FRED_MARKET = {
+    "us_3m": "DGS3MO",
+    "us_1y": "DGS1",
+    "us_2y": "DGS2",
+    "us_5y": "DGS5",
+    "us_7y": "DGS7",
+    "us_10y": "DGS10",
+    "us_30y": "DGS30",
+    "fed_funds": "DFF",
+    "kw_tp": "THREEFYTP10",      # Kim-Wright 10Y term premium
+    "us_10y_real": "DFII10",     # 10Y TIPS real yield
+    "us_10y_bei": "T10YIE",      # 10Y breakeven inflation
+}
+
+# Macro series: last available value in the month
+MONTHLY_FRED_MACRO = {
+    "core_pce": "PCEPILFE",      # core PCE price index (monthly)
+    "unrate": "UNRATE",          # unemployment rate (monthly)
+    "nrou": "NROU",              # CBO natural rate of unemployment (quarterly)
+    "deficit_gdp": "FYFSGDA188S",  # federal surplus/deficit % GDP (annual)
+}
+
+MONTHLY_BOC_MARKET = {
+    "canada_10y": "BD.CDN.10YR.DQ.YLD",
+    "canada_2y": "BD.CDN.2YR.DQ.YLD",
+    "boc_rate": "B114039",
+}
+
+# Series the forecast model cannot run without
+REQUIRED_MONTHLY = ["us_10y", "fed_funds", "canada_10y", "boc_rate"]
+
+ACM_URL = (
+    "https://www.newyorkfed.org/medialibrary/media/research/"
+    "data_indices/ACMTermPremium.xls"
+)
+
+
+def fetch_acm(start: str) -> pd.DataFrame:
+    """
+    Download the NY Fed ACM term structure decomposition (daily).
+    Returns columns acm_tp (ACMTP10) and acm_rny (ACMRNY10, risk-neutral 10Y yield).
+    Requires the `xlrd` package to read the .xls file.
+    """
+    raw = pd.read_excel(ACM_URL, sheet_name=0)
+    raw["DATE"] = pd.to_datetime(raw["DATE"], format="mixed", dayfirst=True)
+    raw = raw.set_index("DATE").sort_index()
+    out = raw[["ACMTP10", "ACMRNY10"]].rename(
+        columns={"ACMTP10": "acm_tp", "ACMRNY10": "acm_rny"}
+    )
+    return out.loc[start:]
+
+
+def _try(fetch, name: str, required: bool):
+    try:
+        return fetch()
+    except Exception as exc:  # network / series errors
+        if required:
+            raise
+        logger.warning("  Skipping optional series %s: %s", name, exc)
+        return None
+
+
+def build_monthly_dataset(config: dict, start: str = "1990-01-01") -> pd.DataFrame:
+    """
+    Fetch all series needed by the forecast model and return a month-end indexed DataFrame.
+    Market series are monthly averages; macro series take the last value in each month.
+    Optional series that fail to download are skipped with a warning.
+    """
+    api_key = config["fred_api_key"]
+    end = date.today().isoformat()
+    logger.info("Fetching monthly forecast dataset from %s to %s", start, end)
+
+    market: dict[str, pd.Series] = {}
+    macro: dict[str, pd.Series] = {}
+
+    for name, sid in MONTHLY_FRED_MARKET.items():
+        s = _try(lambda: fetch_fred_series(sid, start, end, api_key), name, name in REQUIRED_MONTHLY)
+        if s is not None:
+            market[name] = s
+    for name, sid in MONTHLY_BOC_MARKET.items():
+        s = _try(lambda: fetch_boc_series(sid, start, end), name, name in REQUIRED_MONTHLY)
+        if s is not None:
+            market[name] = s
+    for name, sid in MONTHLY_FRED_MACRO.items():
+        s = _try(lambda: fetch_fred_series(sid, start, end, api_key), name, False)
+        if s is not None:
+            macro[name] = s
+
+    acm = _try(lambda: fetch_acm(start), "acm", False)
+    if acm is not None:
+        for col in acm.columns:
+            market[col] = acm[col]
+
+    daily = pd.DataFrame(market)
+    monthly = daily.resample("ME").mean()
+    # Realized volatility of daily 10Y changes within the month (bps)
+    monthly["us_10y_rvol"] = daily["us_10y"].diff().resample("ME").std() * 100
+
+    if macro:
+        monthly = monthly.join(pd.DataFrame(macro).resample("ME").last(), how="left")
+
+    return finalize_monthly_dataset(monthly)
+
+
+def finalize_monthly_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    """Add derived columns and trim. Shared by the live fetcher, CSV cache and synthetic data."""
+    df = df.copy().sort_index()
+    df = df.dropna(subset=["us_10y", "fed_funds"], how="any")
+    # Slow-moving macro series are published with a lag / at lower frequency
+    for col in ("nrou", "deficit_gdp", "core_pce", "unrate"):
+        if col in df:
+            df[col] = df[col].ffill()
+    if "core_pce" in df and "core_pce_yoy" not in df:
+        df["core_pce_yoy"] = df["core_pce"].pct_change(12, fill_method=None) * 100
+    # Best available term premium: ACM if present, else Kim-Wright
+    if "us_tp" not in df:
+        if "acm_tp" in df and df["acm_tp"].notna().any():
+            df["us_tp"] = df["acm_tp"].fillna(df.get("kw_tp"))
+        elif "kw_tp" in df:
+            df["us_tp"] = df["kw_tp"]
+    if "us_tp" in df:
+        df["us_rny"] = df["us_10y"] - df["us_tp"]  # risk-neutral (expectations) component
+    if "canada_10y" in df:
+        df["spread_can_us"] = df["canada_10y"] - df["us_10y"]
+        df["policy_diff"] = df["boc_rate"] - df["fed_funds"]
+    return df
+
+
+def save_monthly_dataset(df: pd.DataFrame, path) -> None:
+    from pathlib import Path
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index_label="date")
+
+
+def load_monthly_dataset(path) -> pd.DataFrame:
+    df = pd.read_csv(path, index_col="date", parse_dates=True)
+    return finalize_monthly_dataset(df)

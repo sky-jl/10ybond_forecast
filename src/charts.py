@@ -144,7 +144,7 @@ def chart_spread_10y_ffr(df: pd.DataFrame, metrics: dict, output_dir: Path) -> s
 
 
 def chart_acm_term_premium(df: pd.DataFrame, metrics: dict, output_dir: Path) -> str:
-    """ACM 10Y term premium with mean and ±1σ bands."""
+    """Kim-Wright 10Y term premium with mean and ±1σ bands."""
     acm = _tail_years(df["acm_tp"], 20)
     mu = acm.mean()
     sigma = acm.std()
@@ -152,7 +152,7 @@ def chart_acm_term_premium(df: pd.DataFrame, metrics: dict, output_dir: Path) ->
     fig, ax = plt.subplots(figsize=(9, 4))
     ax.fill_between(acm.index, mu - sigma, mu + sigma, alpha=0.12, color=BLUE,
                     label="±1σ band")
-    ax.plot(acm.index, acm.values, color=BLUE, linewidth=1.2, label="ACM Term Premium")
+    ax.plot(acm.index, acm.values, color=BLUE, linewidth=1.2, label="Kim-Wright Term Premium")
     ax.axhline(mu, color=ORANGE, linewidth=1.0, linestyle="--",
                label=f"Historical mean: {mu:.2f}%")
     ax.axhline(0, color="black", linewidth=0.7)
@@ -168,7 +168,7 @@ def chart_acm_term_premium(df: pd.DataFrame, metrics: dict, output_dir: Path) ->
         arrowprops=dict(arrowstyle="->", color="black", lw=0.8),
     )
 
-    ax.set_title("ACM 10-Year Term Premium", fontsize=11, fontweight="bold", loc="left")
+    ax.set_title("10-Year Term Premium (Kim-Wright)", fontsize=11, fontweight="bold", loc="left")
     ax.set_ylabel("Term Premium (%)")
     _year_fmt(ax)
     ax.legend(fontsize=8, framealpha=0.8)
@@ -241,4 +241,100 @@ def generate_all_charts(df: pd.DataFrame, metrics: dict, output_dir: Path, confi
         "acm_term_premium": chart_acm_term_premium(df, metrics, output_dir),
         "canada_us_spread": chart_canada_us_spread(df, metrics, output_dir),
         "spread_canada_boc": chart_spread_canada_boc(df, metrics, output_dir),
+    }
+
+
+# ============================================================
+# 2-year forecast charts (src/forecasting)
+# ============================================================
+SCENARIO_COLORS = [BLUE, "#C62828", GREEN, "#6A1B9A", ORANGE, GREY]
+
+
+def _month_fmt(ax: plt.Axes) -> None:
+    ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=[1, 7]))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+
+
+def chart_forecast_fan(result, country: str, output_dir: Path, history_years: int = 4) -> str:
+    """History + probability-weighted central path + 10–90 / 25–75 percentile bands + scenarios."""
+    col = "us_10y" if country == "us" else "canada_10y"
+    label = "US 10Y Treasury" if country == "us" else "Canada 10Y GoC"
+    hist = _tail_years(result.history[col], history_years)
+    fan = result.fan
+    color = BLUE if country == "us" else "#B71C1C"
+
+    fig, ax = plt.subplots(figsize=(9, 4.2))
+    ax.plot(hist.index, hist.values, color="black", linewidth=1.2, label="History (monthly avg)")
+    ax.fill_between(fan.index, fan[f"{col}_p10"], fan[f"{col}_p90"], color=color, alpha=0.12,
+                    label="10–90th pct")
+    ax.fill_between(fan.index, fan[f"{col}_p25"], fan[f"{col}_p75"], color=color, alpha=0.22,
+                    label="25–75th pct")
+    for (name, sc), c in zip(result.scenarios.items(), SCENARIO_COLORS[1:]):
+        ax.plot(sc.index, sc[col], color=c, linewidth=0.9, linestyle="--",
+                label=f"{name} ({result.probabilities[name]:.0%})")
+    ax.plot(result.central.index, result.central[col], color=color, linewidth=2.0,
+            label="Probability-weighted")
+    end = result.central[col].iloc[-1]
+    ax.annotate(f"{end:.2f}%", xy=(result.central.index[-1], end), xytext=(6, 0),
+                textcoords="offset points", fontsize=8, va="center", color=color)
+    ax.axvline(result.as_of, color=GREY, linewidth=0.8, linestyle=":")
+    ax.set_title(f"{label} — 2-Year Forecast", fontsize=11, fontweight="bold", loc="left")
+    ax.set_ylabel("Yield (%)")
+    _year_fmt(ax)
+    ax.legend(fontsize=7, framealpha=0.85, loc="best", ncol=2)
+    return _save(fig, output_dir / f"chart_forecast_fan_{country}.png")
+
+
+def chart_forecast_decomposition(result, output_dir: Path) -> str:
+    """Stacked components of the central US 10Y path: expectations + basis + TP + overlay."""
+    c = result.central
+    fig, ax = plt.subplots(figsize=(9, 4))
+    exp_basis = c["us_expectations"] + c["us_basis"]
+    ax.fill_between(c.index, 0, exp_basis, color=BLUE, alpha=0.35,
+                    label="Expected avg short rate (+ basis)")
+    ax.fill_between(c.index, exp_basis, exp_basis + c["us_tp"], color=ORANGE, alpha=0.45,
+                    label="Term premium")
+    if c["us_overlay"].abs().max() > 1e-9:
+        ax.plot(c.index, c["us_10y"] - c["us_overlay"], color=GREY, linewidth=0.9,
+                linestyle="--", label="Before judgmental overlay")
+    ax.plot(c.index, c["us_10y"], color="black", linewidth=1.8, label="US 10Y forecast")
+    ax.plot(c.index, c["fed_funds"], color=GREEN, linewidth=1.2, label="Fed funds path")
+    lo = min(c["fed_funds"].min(), exp_basis.min())
+    ax.set_ylim(max(0.0, lo - 0.75), c["us_10y"].max() + 0.5)
+    ax.set_title("US 10Y Forecast Decomposition (probability-weighted)", fontsize=11,
+                 fontweight="bold", loc="left")
+    ax.set_ylabel("%")
+    _month_fmt(ax)
+    ax.legend(fontsize=7, framealpha=0.85, loc="lower left", ncol=2)
+    return _save(fig, output_dir / "chart_forecast_decomposition.png")
+
+
+def chart_policy_scenarios(result, country: str, output_dir: Path, history_years: int = 3) -> str:
+    """Policy-rate scenario paths (Fed or BoC)."""
+    col = "fed_funds" if country == "us" else "boc_rate"
+    label = "Fed Funds Rate" if country == "us" else "BoC Overnight Rate"
+    hist = _tail_years(result.history[col], history_years)
+    fig, ax = plt.subplots(figsize=(9, 3.6))
+    ax.plot(hist.index, hist.values, color="black", linewidth=1.2, label="History")
+    for (name, sc), c in zip(result.scenarios.items(), SCENARIO_COLORS[1:]):
+        ax.plot(sc.index, sc[col], color=c, linewidth=1.2,
+                label=f"{name} ({result.probabilities[name]:.0%})")
+    ax.plot(result.central.index, result.central[col], color=BLUE, linewidth=2.0,
+            label="Probability-weighted")
+    ax.axvline(result.as_of, color=GREY, linewidth=0.8, linestyle=":")
+    ax.set_title(f"{label} — Scenario Paths", fontsize=11, fontweight="bold", loc="left")
+    ax.set_ylabel("%")
+    _year_fmt(ax)
+    ax.legend(fontsize=7, framealpha=0.85, loc="best")
+    return _save(fig, output_dir / f"chart_policy_scenarios_{country}.png")
+
+
+def generate_forecast_charts(result, output_dir: Path) -> dict[str, str]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        "forecast_fan_us": chart_forecast_fan(result, "us", output_dir),
+        "forecast_fan_canada": chart_forecast_fan(result, "canada", output_dir),
+        "forecast_decomposition": chart_forecast_decomposition(result, output_dir),
+        "policy_scenarios_us": chart_policy_scenarios(result, "us", output_dir),
+        "policy_scenarios_canada": chart_policy_scenarios(result, "canada", output_dir),
     }

@@ -40,7 +40,7 @@ def run_analysis(df: pd.DataFrame, config: dict) -> dict:
     df["spread_10y_ffr"] = df["us_10y"] - df["fed_funds"]
     results.update(_stats(df["spread_10y_ffr"], "spread_10y_ffr"))
 
-    # --- 2. ACM Term Premium ---
+    # --- 2. Term premium (Kim-Wright THREEFYTP10; column name kept as acm_tp) ---
     results.update(_stats(df["acm_tp"], "acm_tp"))
 
     # --- 3. Canada–US spread ---
@@ -93,7 +93,7 @@ def run_analysis(df: pd.DataFrame, config: dict) -> dict:
         "implied_10y_using_20y_avg_spread": round(
             long_run_ffr + results["spread_10y_ffr_mean_20y"], 3
         ),
-        # Framework 2: ACM decomposition — expected short rate + explicit term premium
+        # Framework 2: term-premium decomposition — expected short rate + explicit term premium
         # (long-run FFR as the expected short rate converging over 10Y horizon)
         "implied_10y_acm_10y_avg_tp": round(long_run_ffr + results["acm_tp_mean_10y"], 3),
         "implied_10y_acm_20y_avg_tp": round(long_run_ffr + results["acm_tp_mean_20y"], 3),

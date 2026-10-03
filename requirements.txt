@@ -7,3 +7,6 @@ pyyaml>=6.0
 requests>=2.31.0
 numpy>=1.24.0
 python-dotenv>=1.0.0
+openpyxl>=3.1.0     # Excel export of forecast tables
+xlrd>=2.0.1         # read NY Fed ACM term premium (.xls)
+pytest>=7.0         # tests
