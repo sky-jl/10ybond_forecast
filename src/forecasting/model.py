@@ -128,7 +128,8 @@ def project_scenarios(df: pd.DataFrame, config: dict, fcfg: dict | None = None) 
         boc = anchored_path(sc.get("boc_rate"), float(last["boc_rate"]), idx) if sc.get("boc_rate") \
             else policy_path.boc_model_path(df, fed, idx, boc_n, taylor_used["rho"],
                                             float(fcfg.get("boc_fed_passthrough", 0.5)))
-        paths[name] = {"fed": fed, "boc": boc, "tp_target": sc.get("term_premium_target")}
+        paths[name] = {"fed": fed, "boc": boc,
+                       "tp_target": term_premium.scenario_target(df, tp_cfg, sc)}
         probs[name] = float(sc.get("probability", 1.0))
 
     ms = fcfg.get("model_scenario", {"include": True, "probability": 0.0})

@@ -131,6 +131,10 @@ MONTHLY_FRED_MARKET = {
     "kw_tp": "THREEFYTP10",      # Kim-Wright 10Y term premium
     "us_10y_real": "DFII10",     # 10Y TIPS real yield
     "us_10y_bei": "T10YIE",      # 10Y breakeven inflation
+    "us_5y5y_bei": "T5YIFR",     # 5y5y forward inflation expectation (long-run credibility)
+    "oil_brent": "DCOILBRENTEU", # Brent crude, $/bbl (energy / geopolitics)
+    "usd_broad": "DTWEXBGS",     # nominal broad US dollar index
+    "vix": "VIXCLS",             # equity implied volatility (risk sentiment)
 }
 
 # Macro series: last available value in the month
@@ -140,6 +144,9 @@ MONTHLY_FRED_MACRO = {
     "nrou": "NROU",              # CBO natural rate of unemployment (quarterly)
     "deficit_gdp": "FYFSGDA188S",  # federal surplus/deficit % GDP (annual)
     "boc_rate_fred": "IRSTCB01CAM156N",  # OECD: Canada central bank rate (back-fills boc_rate)
+    "debt_gdp": "FYGFGDQ188S",   # federal debt held by the public, % GDP (quarterly)
+    "fed_assets": "WALCL",       # Fed total assets, $ millions (weekly) — QE / QT
+    "gdp_nominal": "GDP",        # nominal GDP, $ billions SAAR (quarterly)
 }
 
 MONTHLY_BOC_MARKET = {
@@ -272,11 +279,14 @@ def finalize_monthly_dataset(df: pd.DataFrame) -> pd.DataFrame:
     if complete.any():
         df = df.loc[:complete[complete].index[-1]]
     # Slow-moving macro series are published with a lag / at lower frequency
-    for col in ("nrou", "deficit_gdp", "core_pce", "unrate"):
+    for col in ("nrou", "deficit_gdp", "core_pce", "unrate", "debt_gdp", "gdp_nominal", "fed_assets"):
         if col in df:
             df[col] = df[col].ffill()
     if "core_pce" in df and "core_pce_yoy" not in df:
         df["core_pce_yoy"] = df["core_pce"].pct_change(12, fill_method=None) * 100
+    # Fed balance sheet as % of GDP (QE absorbs duration supply; controls the fiscal-TP link)
+    if "fed_assets" in df and "gdp_nominal" in df and "fed_bs_gdp" not in df:
+        df["fed_bs_gdp"] = df["fed_assets"] / 1000 / df["gdp_nominal"] * 100
     # Best available term premium: ACM if present, else Kim-Wright
     if "us_tp" not in df:
         if "acm_tp" in df and df["acm_tp"].notna().any():

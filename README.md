@@ -50,6 +50,20 @@ Canada 10Y = US 10Y  +  Canada–US spread  +  overlay
 | Uncertainty | `uncertainty.py` | Scenario mixture + joint block bootstrap of monthly US/Canada yield changes → 10/25/50/75/90 pct |
 | Backtest | `backtest.py` | Real-time style, 2005→: model vs random walk, AR(1), forward rates, Diebold–Li; RMSE, DM test |
 
+### Macro drivers (fiscal, Fed, energy, geopolitics)
+
+- **What moved yields** (`attribution.py`, app tab *Macro drivers*, PDF page 1): the last quarter's
+  US 10Y change split three ways — expectations vs term premium, real yield vs breakeven, 2Y vs
+  2s10s — with Fed funds, 5y5y inflation, oil, USD and VIX, plus a rule-based reading of what the
+  market traded (Fed path, inflation/energy, or term premium/fiscal).
+- **Fiscal fair value of the term premium** (`term_premium.py`): TP regressed on debt held by the
+  public/GDP, deficit/GDP, Fed balance sheet/GDP (QE/QT control) and rate volatility. Set
+  `term_premium.target: regression` and your horizon `drivers` (e.g. CBO debt/deficit path); per
+  scenario via `tp_drivers`.
+- **Named risk-premium add-ons** (`term_premium.addons_bps`, per scenario `tp_addons_bps`):
+  Fed independence, geopolitics, energy-inflation risk, fiscal supply — in bps, shown by name in the
+  report.
+
 Why expectations + term premium (not real + breakeven) as the main split: over 2 years most 10Y
 variation comes from the expected policy path, which has explicit, forecastable drivers. TIPS real
 yields and breakevens each contain their own risk/liquidity premia and are not easier to forecast;

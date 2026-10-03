@@ -47,8 +47,11 @@ def run_pipeline(df: pd.DataFrame, config: dict, out_dir: Path,
 
 def attach_to_metrics(result: ForecastResult, metrics: dict) -> None:
     """Store forecast outputs under private keys (excluded from the generic metrics JSON)."""
+    from .attribution import attribute
+
     metrics["_forecast"] = result
     metrics["_forecast_summary"] = result.summary()
+    metrics["_forecast_summary"]["last_quarter_attribution"] = attribute(result.history)
     if result.backtest:
         s = result.backtest["summary"]
         metrics["_backtest_summary_df"] = s

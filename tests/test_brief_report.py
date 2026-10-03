@@ -51,3 +51,19 @@ def test_claude_path_parses_structured_output(result, config, monkeypatch):
 
 def test_context_is_json_serialisable(result, config):
     json.dumps(build_context(result, config), default=float)
+
+
+def test_long_commentary_still_fits_two_pages(result, config):
+    from brief_report import build_pdf, template_commentary
+    ctx = build_context(result, config)
+    s = "A long sentence about the policy path, the term premium and fiscal supply pressures. " * 3
+    com = {k: ([s] * 4 if isinstance(v, list) else s) for k, v in template_commentary(ctx).items()}
+    pdf = build_pdf(result, com, config, ctx)
+    assert len(pypdf.PdfReader(io.BytesIO(pdf)).pages) <= 2
+
+
+def test_context_has_macro_attribution(result, config):
+    ctx = build_context(result, config)
+    att = ctx["last_quarter_attribution"]
+    assert {"Expectations vs term premium", "Real vs inflation", "Front end vs curve"} <= set(att["splits"])
+    assert ctx["term_premium_fiscal"]["drivers"]

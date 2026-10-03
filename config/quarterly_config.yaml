@@ -98,6 +98,9 @@ forecast:
   # boc_rate may be omitted → derived from the BoC model path + Fed pass-through.
   # term_premium_target (optional, %): scenario-specific TP destination, e.g. a fiscal-stress
   #   scenario with a higher TP. Omit to use the global term_premium setting below.
+  # tp_drivers (optional): scenario fiscal path through the TP regression, e.g.
+  #   tp_drivers: {debt_gdp: 110, deficit_gdp: -8.0}
+  # tp_addons_bps (optional): scenario-specific risk premia, e.g. {fed_independence: 25}
   # probability: weights are rescaled to sum to 1 (together with model_scenario).
   scenarios:
     - name: "Base"
@@ -147,13 +150,25 @@ forecast:
                                       # (short = market converges to YOUR neutral view quickly)
 
   # ---- 3. Term premium -----------------------------------------------------------
+  # Main channel for fiscal / macro risk. "regression" = fiscal fair value: TP regressed on
+  # debt/GDP, deficit/GDP, Fed balance sheet/GDP (QE/QT) and rate volatility, evaluated at the
+  # driver values YOU expect at the horizon end (e.g. CBO projections).
   term_premium:
     target: "historical"        # number (e.g. 0.75) = subjective view | "historical" | "regression"
     historical_window_years: 30   # 10y window is dominated by QE-era negative term premia
     halflife_months: null       # null = estimated AR(1) speed
-    drivers:                    # used when target = "regression" (null/omitted → latest value)
-      # deficit_gdp: -6.5       # federal deficit % GDP (negative = deficit)
+    drivers:                    # used when target = "regression" (omitted → latest value)
+      # debt_gdp: 105           # debt held by the public, % GDP, at horizon end
+      # deficit_gdp: -6.5       # federal balance % GDP (negative = deficit)
+      # fed_bs_gdp: 20          # Fed balance sheet % GDP (QT lowers it → higher TP)
       # us_10y_rvol_12m: 7.0    # realised 10Y volatility, bps/day
+    # Named risk-premium add-ons (bps, added to the TP target, phased in) for macro risks that a
+    # regression can't capture. They are listed by name in the report.
+    addons_bps:
+      fed_independence: 0       # e.g. 15 if political pressure on the Fed raises inflation risk
+      geopolitics: 0
+      energy_inflation: 0
+      fiscal_supply: 0          # e.g. issuance skewed to coupons, weak auctions
 
   # ---- 4. Canada–US spread -------------------------------------------------------
   canada_spread:

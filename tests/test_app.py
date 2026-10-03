@@ -15,11 +15,30 @@ def _run(at):
     return at
 
 
+def _us_end(at):
+    return next(m.value for m in at.metric if "US 10Y" in m.label and "weighted" in m.label)
+
+
 def test_app_runs_and_reacts_to_inputs():
     at = _run(st_testing.AppTest.from_file(APP))
-    assert len(at.metric) == 4
-    before = at.metric[1].value
+    assert any(m.label == "Fiscal fair value" for m in at.metric)       # macro tab rendered
+    before = _us_end(at)
     neutral = next(s for s in at.sidebar.number_input if s.label.startswith("Fed neutral"))
     neutral.set_value(neutral.value + 1.0)
     _run(at)
-    assert at.metric[1].value != before   # higher neutral → different US 10Y path
+    assert _us_end(at) != before   # higher neutral → different US 10Y path
+
+
+def test_fiscal_mode_and_addons_move_forecast():
+    at = _run(st_testing.AppTest.from_file(APP))
+    before = _us_end(at)
+    next(r for r in at.sidebar.radio if r.label == "Target").set_value("Fiscal fair value (regression)")
+    _run(at)
+    debt = next(n for n in at.sidebar.number_input if n.label.startswith("Debt held by public"))
+    debt.set_value(debt.value + 20)
+    _run(at)
+    after_fiscal = _us_end(at)
+    assert after_fiscal != before
+    next(n for n in at.sidebar.number_input if n.label == "Fed independence").set_value(25)
+    _run(at)
+    assert _us_end(at) != after_fiscal

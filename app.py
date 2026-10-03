@@ -30,7 +30,9 @@ load_dotenv(ROOT / ".env")  # ANTHROPIC_API_KEY for the PDF report commentary
 
 from data_fetcher import load_monthly_dataset  # noqa: E402
 from forecasting import run_forecast  # noqa: E402
+from forecasting.attribution import attribute  # noqa: E402
 from forecasting.backtest import run_backtest  # noqa: E402
+from forecasting.term_premium import DRIVER_LABELS, fit_tp_regression  # noqa: E402
 
 DEFAULT_CONFIG = ROOT / "config" / "quarterly_config.yaml"
 DEFAULT_DATA = ROOT / "output" / "forecast" / "monthly_dataset.csv"
@@ -75,6 +77,14 @@ def load_data(path: str, mtime: float, synthetic: bool) -> pd.DataFrame:
 @st.cache_data(show_spinner="Running forecast…")
 def cached_forecast(_df: pd.DataFrame, data_key: str, cfg_json: str):
     return run_forecast(_df, json.loads(cfg_json))
+
+
+@st.cache_data(show_spinner=False)
+def cached_tp_fit(_df: pd.DataFrame, data_key: str):
+    try:
+        return fit_tp_regression(_df)
+    except ValueError:
+        return None
 
 
 @st.cache_data(show_spinner="Running backtest (≈5–20 s)…")
@@ -169,10 +179,12 @@ with sb.expander("Neutral rates & expectations", expanded=True):
         st.caption(f"Market risk-neutral 10Y today: **{df['us_rny'].dropna().iloc[-1]:.2f}%** "
                    f"(10Y − term premium)")
 
-with sb.expander("Term premium", expanded=True):
+tp_fit = cached_tp_fit(df, f"{data_path}|{synthetic}|{df.index[-1]}|{len(df)}")
+
+with sb.expander("Term premium (fiscal & macro risk)", expanded=True):
     tp_cfg = fbase.get("term_premium", {})
     tp_default = tp_cfg.get("target", "historical")
-    modes = ["Your view (number)", "Historical mean", "Regression on drivers"]
+    modes = ["Your view (number)", "Historical mean", "Fiscal fair value (regression)"]
     mode_idx = 0 if isinstance(tp_default, (int, float)) else (2 if tp_default == "regression" else 1)
     tp_mode = st.radio("Target", modes, index=mode_idx, horizontal=False)
     tp_now = float(df["us_tp"].dropna().iloc[-1]) if "us_tp" in df else np.nan
@@ -185,6 +197,31 @@ with sb.expander("Term premium", expanded=True):
     if tp_mode == modes[1] and "us_tp" in df:
         tp = df["us_tp"].dropna()
         st.caption(f"→ mean over {tp_window}y: **{tp[tp.index >= tp.index[-1] - pd.DateOffset(years=tp_window)].mean():.2f}%**")
+    tp_drivers = {}
+    if tp_fit:
+        st.caption(f"Fiscal fair value today: **{tp_fit['fair_value_now']:.2f}%** "
+                   f"(actual {tp_fit['tp_now']:.2f}%, {tp_fit['residual_now_bps']:+.0f} bps gap)")
+    if tp_mode == modes[2]:
+        if not tp_fit:
+            st.warning("Fiscal driver data not available — falls back to the historical mean.")
+        else:
+            st.caption("Driver values you expect at the horizon end:")
+            saved = tp_cfg.get("drivers") or {}
+            for c in tp_fit["drivers"]:
+                tp_drivers[c] = st.number_input(
+                    DRIVER_LABELS.get(c, c), -50.0, 300.0,
+                    float(saved.get(c, round(tp_fit["latest_drivers"][c], 1))), 0.5, format="%.1f",
+                    key=f"drv_{c}", help=f"Latest: {tp_fit['latest_drivers'][c]:.1f} · "
+                                         f"TP sensitivity: {tp_fit['coef'][c] * 100:+.1f} bps per unit")
+    st.markdown("**Macro risk-premium add-ons (bps)**")
+    saved_adds = tp_cfg.get("addons_bps") or {}
+    add_names = list(dict.fromkeys(["fed_independence", "geopolitics", "energy_inflation", "fiscal_supply",
+                                    *saved_adds]))
+    addons = {}
+    ac = st.columns(2)
+    for i, nm in enumerate(add_names):
+        addons[nm] = ac[i % 2].number_input(nm.replace("_", " ").capitalize(), -100, 200,
+                                            int(saved_adds.get(nm, 0) or 0), 5, key=f"add_{nm}")
     tp_hl_on = st.checkbox("Set adjustment half-life manually", value=bool(tp_cfg.get("halflife_months")))
     tp_hl = st.slider("TP half-life (months)", 3, 120, int(tp_cfg.get("halflife_months") or 24), 3,
                       disabled=not tp_hl_on)
@@ -283,6 +320,8 @@ f["term_premium"] = {
     "target": tp_value if tp_mode == modes[0] else ("regression" if tp_mode == modes[2] else "historical"),
     "historical_window_years": tp_window,
     "halflife_months": tp_hl if tp_hl_on else None,
+    "drivers": tp_drivers or (fbase.get("term_premium") or {}).get("drivers"),
+    "addons_bps": {k: v for k, v in addons.items() if v},
 }
 f["canada_spread"] = {**(fbase.get("canada_spread") or {}), "target": sp_value if sp_fixed else "model"}
 f["boc_fed_passthrough"] = boc_pass
@@ -371,7 +410,7 @@ def policy_chart(col: str, label: str) -> go.Figure:
 
 
 tabs = st.tabs(["US 10Y", "Canada 10Y", "Decomposition", "Policy paths", "Tables", "Backtest",
-                "PDF report", "Export config"])
+                "PDF report", "Export config", "Macro drivers"])
 with tabs[0]:
     st.plotly_chart(fan_chart("us_10y", "US 10Y Treasury"), width="stretch", theme="streamlit")
 with tabs[1]:
@@ -464,3 +503,70 @@ with tabs[7]:
                           sort_keys=False, allow_unicode=True)
     st.code(text, language="yaml")
     st.download_button("Download forecast settings (YAML)", text.encode(), "forecast_settings.yaml", "text/yaml")
+
+with tabs[8]:
+    st.markdown("### What moved yields — what was the market trading?")
+    win_opts = {"Last completed quarter": None, "Last 1 month": 1, "Last 3 months": 3,
+                "Last 6 months": 6, "Last 12 months": 12}
+    win = st.radio("Window (monthly averages)", list(win_opts), horizontal=True)
+    att = attribute(df, win_opts[win])
+    if att["us_10y_change_bps"] is None:
+        st.info("Not enough data in this window.")
+    else:
+        for line in att["reading"]:
+            st.markdown(f"- {line}")
+        labels, vals, cols = [], [], []
+        for i, (name, parts) in enumerate(att["splits"].items()):
+            for label, v in parts.items():
+                labels.append(f"{label}  ·  {name}")
+                vals.append(v)
+                cols.append(SLOTS[i])
+        short = [lab.split("  ·  ")[0] for lab in labels]
+        fig = go.Figure(go.Bar(
+            y=short[::-1], x=vals[::-1], orientation="h", marker=dict(color=cols[::-1]),
+            text=[f"{v:+.0f}" for v in vals[::-1]], textposition="outside", cliponaxis=False,
+            customdata=[lab.split("  ·  ")[1] for lab in labels][::-1],
+            hovertemplate="%{y} (%{customdata}): %{x:+.1f} bps<extra></extra>"))
+        tot = att["us_10y_change_bps"]
+        fig.add_vline(x=tot, line=dict(color=INK, dash="dot", width=1.5))
+        fig.add_vline(x=0, line=dict(color=MUTED, width=1))
+        lim = max(abs(v) for v in vals + [tot]) * 1.35 + 2
+        fig = base_layout(fig, f"US 10Y {tot:+.0f} bps ({att['start']} → {att['end']}) — each pair sums to the "
+                               "total (dotted line)", 340)
+        fig.update_layout(showlegend=False, hovermode="closest", margin=dict(l=10, r=30, t=50, b=30))
+        fig.update_xaxes(title="bps", range=[-lim, lim], zeroline=False)
+        fig.update_yaxes(title="")
+        st.plotly_chart(fig, width="stretch", theme="streamlit")
+        st.caption("Pairs: blue = expectations vs term premium · orange = real yield vs breakeven · "
+                   "green = 2Y vs 2s10s slope.")
+        ctx_rows = [{"Indicator": k, "Change": f"{v['change']:+.1f} {v['unit']}", "Level now": f"{v['level']:.2f}"}
+                    for k, v in att["context"].items()]
+        st.dataframe(pd.DataFrame(ctx_rows), hide_index=True, width="stretch")
+        st.caption("Heuristic reading of the numbers, not causal identification — confirm against the "
+                   "news flow (auctions, Fed communication, oil/geopolitics, fiscal announcements).")
+
+    st.markdown("### Fiscal fair value of the term premium")
+    if not tp_fit:
+        st.info("Debt/deficit/Fed balance-sheet data not in the dataset — rerun `python forecast.py` to fetch it.")
+    else:
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Term premium now", fmt_pct(tp_fit["tp_now"]))
+        m2.metric("Fiscal fair value", fmt_pct(tp_fit["fair_value_now"]))
+        m3.metric("Gap", f"{tp_fit['residual_now_bps']:+.0f} bps", delta_color="off")
+        m4.metric("R²", f"{tp_fit['r2']:.2f}", help=f"{tp_fit['n']} months, {tp_fit['sample']}")
+        fitted = tp_fit["fitted"]
+        actual = res.history["us_tp"].reindex(fitted.index)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=actual.index, y=actual, name="Term premium (actual)",
+                                 line=dict(color=INK, width=1.6), hovertemplate="%{y:.2f}%"))
+        fig.add_trace(go.Scatter(x=fitted.index, y=fitted, name="Fiscal fair value (fitted)",
+                                 line=dict(color=SLOTS[1], width=2), hovertemplate="%{y:.2f}%"))
+        st.plotly_chart(base_layout(fig, "Term premium vs fiscal fair value", 340), width="stretch", theme="streamlit")
+        coef_rows = [{"Driver": DRIVER_LABELS.get(c, c), "Latest": f"{tp_fit['latest_drivers'][c]:.1f}",
+                      "TP sensitivity (bps per unit)": f"{tp_fit['coef'][c] * 100:+.2f}"}
+                     for c in tp_fit["drivers"]]
+        st.dataframe(pd.DataFrame(coef_rows), hide_index=True, width="stretch")
+        st.caption("Descriptive regression (not causal): fiscal series trend slowly and QE distorted the 2010s, "
+                   "which is why the Fed balance sheet is included as a control. Use it to frame the fiscal "
+                   "channel; set your horizon driver values in the sidebar (Fiscal fair value mode) and "
+                   "add named risk premia for Fed independence, geopolitics or energy.")

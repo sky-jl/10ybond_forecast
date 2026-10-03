@@ -327,6 +327,10 @@ BACKTEST SUMMARY (RMSE in pp; rmse_vs_rw < 1 means the model beat a random walk)
 
 Write 6–8 bullet points covering:
 - Probability-weighted path for the {label} over the next 8 quarters, with the 10–90th percentile range at the end
+- What the market traded last quarter (use last_quarter_attribution: Fed path vs term premium,
+  real vs breakeven, front end vs curve) and the macro drivers behind it — fiscal deficits/debt and
+  Treasury supply (term premium vs its fiscal fair value in params.term_premium), Fed policy and
+  independence (5y5y inflation), energy and geopolitics; do not invent specific events
 - How the scenarios (and their probabilities) differ and what policy-rate assumptions drive them
 {focus}
 - Where the forecaster's judgmental overlay (if non-zero) moves the result vs the pure model

@@ -34,10 +34,12 @@ def make_synthetic_monthly(start: str = "1995-01-31", end: str = "2026-09-30",
         ffr[t] = max(0.95 * ffr[t - 1] + 0.05 * rule + rng.normal(0, 0.08), 0.05)
         boc[t] = max(0.95 * boc[t - 1] + 0.05 * (ffr[t] - 0.3) + rng.normal(0, 0.08), 0.25)
 
-    # Term premium AR(1)
-    tp = np.empty(n); tp[0] = 1.2
+    # Term premium AR(1) around a fiscal "fair value" (rises with debt/GDP)
+    debt = np.linspace(35, 100, n)
+    fair = -0.4 + 0.015 * debt
+    tp = np.empty(n); tp[0] = fair[0]
     for t in range(1, n):
-        tp[t] = 0.6 + 0.97 * (tp[t - 1] - 0.6) + rng.normal(0, 0.12)
+        tp[t] = fair[t] + 0.95 * (tp[t - 1] - fair[t - 1]) + rng.normal(0, 0.10)
 
     # Risk-neutral yield: average expected short rate converging to 3%
     k = np.arange(120)
@@ -55,10 +57,17 @@ def make_synthetic_monthly(start: str = "1995-01-31", end: str = "2026-09-30",
         "us_3m": ffr + 0.05, "us_1y": 0.7 * ffr + 0.3 * us10, "us_2y": 0.55 * ffr + 0.45 * us10,
         "us_5y": 0.25 * ffr + 0.75 * us10, "us_7y": 0.1 * ffr + 0.9 * us10, "us_10y": us10,
         "us_30y": us10 + 0.35, "fed_funds": ffr, "kw_tp": tp, "acm_tp": tp, "acm_rny": rny,
-        "us_10y_real": us10 - 2.2, "us_10y_bei": np.full(n, 2.2) + 0.1 * (infl - 2),
+        "us_10y_real": us10 - (2.2 + 0.1 * (infl - 2)), "us_10y_bei": 2.2 + 0.1 * (infl - 2),
         "us_10y_rvol": np.abs(rng.normal(6, 1.5, n)),
         "core_pce": 100 * np.exp(np.cumsum(infl / 1200)), "unrate": u, "nrou": nrou,
         "deficit_gdp": -4.0 + rng.normal(0, 0.5, n),
+        "us_5y5y_bei": 2.3 + 0.05 * (infl - 2) + rng.normal(0, 0.05, n),
+        "oil_brent": 70 * np.exp(np.cumsum(rng.normal(0, 0.06, n))),
+        "usd_broad": 110 * np.exp(np.cumsum(rng.normal(0, 0.015, n))),
+        "vix": np.abs(rng.normal(18, 5, n)),
+        "debt_gdp": np.linspace(35, 100, n) + rng.normal(0, 0.5, n),
+        "fed_assets": np.linspace(0.8e6, 7e6, n),
+        "gdp_nominal": np.linspace(7000, 31000, n),
         "canada_10y": ca10, "canada_2y": 0.5 * boc + 0.5 * ca10, "boc_rate": boc,
     }, index=idx)
     df["core_pce_yoy"] = infl

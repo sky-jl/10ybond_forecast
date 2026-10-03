@@ -47,6 +47,12 @@ BRIEF_SCHEMA = {
     "properties": {
         "headline": {"type": "string", "description": "One sentence, the core call with numbers"},
         "summary": {"type": "string", "description": "3-4 sentences: overall view for both markets"},
+        "market_narrative": {"type": "string", "description":
+                             "2-3 sentences: what the market traded last quarter (Fed path, inflation/energy, "
+                             "term premium/fiscal) based on the attribution numbers"},
+        "macro_backdrop": {"type": "array", "items": {"type": "string"}, "description":
+                           "3-4 bullets on macro drivers of the outlook: fiscal deficits/debt and issuance "
+                           "(use the fiscal fair value), Fed policy and independence, energy, geopolitics"},
         "us_analysis": {"type": "array", "items": {"type": "string"},
                         "description": "3-4 bullets on US 10Y drivers: policy path, term premium, anchors"},
         "canada_analysis": {"type": "array", "items": {"type": "string"},
@@ -57,7 +63,7 @@ BRIEF_SCHEMA = {
                            "description": "2-3 risks that would push yields lower, with rough bps impact"},
         "conclusion": {"type": "string", "description": "2-3 sentences: forecast call and what would change it"},
     },
-    "required": ["headline", "summary", "us_analysis", "canada_analysis", "upside_risks",
+    "required": ["headline", "summary", "market_narrative", "macro_backdrop", "us_analysis", "canada_analysis", "upside_risks",
                  "downside_risks", "conclusion"],
     "additionalProperties": False,
 }
@@ -68,13 +74,20 @@ the model output provided; cite specific numbers (levels in %, changes in bps, p
 The forecast comes from a structural model (10Y = expected average short rate + term premium;
 Canada 10Y = US 10Y + Canada–US spread) with forecaster-chosen policy scenarios, so describe it as
 a scenario-weighted view, not a certainty. Be candid that 10Y yields rarely beat a random walk in
-backtests. Write in plain professional English, no headers or markdown inside strings, and keep
-each bullet to one or two sentences."""
+backtests. Give the macro view equal weight to the technical one: explain the move through fiscal
+deficits, debt and Treasury supply (the term premium vs its fiscal fair value), Fed policy and
+independence (5y5y inflation expectations), energy prices and geopolitics, using the attribution
+of last quarter's move. You have no live news feed: rely on the numbers and the forecaster's macro
+themes, and do not invent specific events or dates. Write in plain professional English, no
+headers or markdown inside strings. The brief must fit two pages: keep the whole commentary under
+about 450 words — summary and narrative under 60 words each, each bullet under 30 words."""
 
 
 # --------------------------------------------------------------------------- inputs
 def build_context(result, config: dict, backtest_summary: pd.DataFrame | None = None) -> dict:
     """Compact, JSON-serialisable facts for the commentary (and the template fallback)."""
+    from forecasting.attribution import attribute
+
     c, f, q = result.central, result.fan, result.quarterly
     end = result.index[-1]
     ctx = {
@@ -116,6 +129,10 @@ def build_context(result, config: dict, backtest_summary: pd.DataFrame | None = 
             "long_run_pce_inflation": config.get("long_run_pce_inflation"),
             "beta_ca_us_36m": result.params.get("beta_ca_us_36m"),
         },
+        "last_quarter_attribution": _round(attribute(result.history)),
+        "term_premium_fiscal": _round({k: v for k, v in (result.params.get("term_premium", {})
+                                                          .get("fiscal_fair_value") or {}).items()}),
+        "term_premium_addons_bps": result.params.get("term_premium", {}).get("addons_bps", {}),
         "macro_themes": config.get("macro_themes", []),
         "forecaster_risks": config.get("medium_term_risks", {}),
     }
@@ -124,6 +141,16 @@ def build_context(result, config: dict, backtest_summary: pd.DataFrame | None = 
         ctx["backtest_rmse_vs_random_walk"] = {
             f"{r.target}_h{int(r.h)}": round(float(r.rmse_vs_rw), 3) for r in s.itertuples()}
     return ctx
+
+
+def _round(x, nd: int = 2):
+    if isinstance(x, dict):
+        return {k: _round(v, nd) for k, v in x.items()}
+    if isinstance(x, list):
+        return [_round(v, nd) for v in x]
+    if isinstance(x, float):
+        return round(x, nd)
+    return x
 
 
 # --------------------------------------------------------------------------- commentary
@@ -167,6 +194,8 @@ def template_commentary(ctx: dict) -> dict:
                     f"The 10–90th percentile range at the horizon is {rng['us_10y'][0]:.2f}–{rng['us_10y'][1]:.2f}% "
                     f"for the US and {rng['canada_10y'][0]:.2f}–{rng['canada_10y'][1]:.2f}% for Canada. "
                     f"The {top} scenario carries the largest weight ({sc[top]['probability']:.0%})."),
+        "market_narrative": " ".join((ctx.get("last_quarter_attribution") or {}).get("reading", [])[:3]),
+        "macro_backdrop": _template_macro(ctx),
         "us_analysis": [
             f"Fed funds path: {cur['fed_funds']:.2f}% now to {end['fed_funds']:.2f}% (weighted) by {ctx['horizon_end']}.",
             f"Expected short-rate component changes {d['us_expectations']:+d} bps; the market-vs-neutral gap "
@@ -184,6 +213,22 @@ def template_commentary(ctx: dict) -> dict:
                        f"{ctx['horizon_end']}. The neutral-rate and term-premium assumptions are the key swing factors."),
         "_source": "Template commentary (no AI) — set ANTHROPIC_API_KEY for an analytical draft",
     }
+
+
+def _template_macro(ctx: dict) -> list[str]:
+    out = []
+    fis = ctx.get("term_premium_fiscal") or {}
+    if fis:
+        d = fis.get("latest_drivers", {})
+        out.append(f"Term premium {fis.get('tp_now', 0):.2f}% vs fiscal fair value {fis.get('fair_value_now', 0):.2f}% "
+                   f"({fis.get('residual_now_bps', 0):+.0f} bps); debt held by public {d.get('debt_gdp', float('nan')):.0f}% "
+                   f"of GDP, federal balance {d.get('deficit_gdp', float('nan')):+.1f}% of GDP.")
+    adds = ctx.get("term_premium_addons_bps") or {}
+    if adds:
+        out.append("Forecaster risk-premium add-ons: " + ", ".join(f"{k.replace('_', ' ')} {v:+.0f} bps"
+                                                                   for k, v in adds.items()) + ".")
+    out += list(ctx.get("macro_themes", []))[:2]
+    return out
 
 
 def draft_commentary(ctx: dict, use_ai: bool = True, api_key: str | None = None) -> dict:
@@ -325,8 +370,18 @@ def _table(data, col_widths, header_rows=1, zebra=True, font=7.4):
 
 
 def build_pdf(result, commentary: dict, config: dict, ctx: dict | None = None) -> bytes:
-    """Render the brief and return PDF bytes."""
+    """Render the brief; if long commentary spills past two pages, re-render in compact mode."""
     ctx = ctx or build_context(result, config)
+    pdf, pages = _render(result, commentary, config, ctx, compact=False)
+    if pages > 2:
+        logger.info("Brief ran to %d pages; re-rendering compact", pages)
+        pdf, pages = _render(result, commentary, config, ctx, compact=True)
+    return pdf
+
+
+def _render(result, commentary: dict, config: dict, ctx: dict, compact: bool) -> tuple[bytes, int]:
+    if compact:  # trim lists, shrink charts
+        commentary = {k: (v[:3] if isinstance(v, list) else v) for k, v in commentary.items()}
     st = _styles()
     buf = io.BytesIO()
     W = letter[0] - 1.2 * inch
@@ -355,7 +410,8 @@ def build_pdf(result, commentary: dict, config: dict, ctx: dict | None = None) -
     story.append(Spacer(1, 5))
     story.append(Paragraph(_esc(commentary["summary"]), st["body"]))
     story.append(Spacer(1, 4))
-    story.append(Image(chart_fans(result), width=W, height=W * 2.55 / 7.4))
+    fan_h = W * 2.55 / 7.4 * (0.82 if compact else 1.0)
+    story.append(Image(chart_fans(result), width=W * (0.82 if compact else 1.0), height=fan_h))
 
     # Quarterly table
     q = result.quarterly
@@ -368,11 +424,29 @@ def build_pdf(result, commentary: dict, config: dict, ctx: dict | None = None) -
     story.append(KeepTogether([Paragraph("Quarterly forecast (quarterly averages, %)", st["h2"]),
                                _table(rows, [W / 8] * 8)]))
 
+    # Last quarter attribution
+    att = ctx.get("last_quarter_attribution") or {}
+    if att.get("splits"):
+        arows = [["US 10Y change split", "Component A", "bps", "Component B", "bps"]]
+        for name, parts in att["splits"].items():
+            (la, va), (lb, vb) = list(parts.items())
+            arows.append([name, la, f"{va:+.0f}", lb, f"{vb:+.0f}"])
+        story.append(KeepTogether([
+            Paragraph(f"What moved yields: {att['start']} → {att['end']} "
+                      f"(US 10Y {att['us_10y_change_bps']:+.0f} bps)", st["h2"]),
+            _table(arows, [1.75 * inch, 1.85 * inch, 0.5 * inch, 1.85 * inch, W - 5.95 * inch]),
+            Spacer(1, 3),
+            Paragraph(_esc(commentary.get("market_narrative", "")), st["body"]),
+        ]))
+
     # Page 2 — analysis
     story.append(PageBreak())
+    story.append(Paragraph("Macro backdrop — fiscal, Fed, energy, geopolitics", st["h2"]))
+    story.append(_bullets(commentary.get("macro_backdrop", []), st))
     story.append(Paragraph("US 10Y — drivers", st["h2"]))
     story.append(_bullets(commentary["us_analysis"], st))
-    story.append(Image(chart_decomposition(result), width=W, height=W * 2.3 / 7.4))
+    k = 0.78 if compact else 1.0
+    story.append(Image(chart_decomposition(result), width=W * k, height=W * 2.3 / 7.4 * k))
     story.append(Paragraph("Canada 10Y — spread and policy", st["h2"]))
     story.append(_bullets(commentary["canada_analysis"], st))
 
@@ -420,7 +494,7 @@ def build_pdf(result, commentary: dict, config: dict, ctx: dict | None = None) -
         canvas.restoreState()
 
     doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
-    return buf.getvalue()
+    return buf.getvalue(), doc.page
 
 
 def generate_brief(result, config: dict, backtest_summary: pd.DataFrame | None = None,
