@@ -3,14 +3,14 @@
 # Edit this file each quarter before running main.py
 # ============================================================
 
-quarter: "Q2 2026"
-run_date: "2026-05-27"
+quarter: "Q3 2026"
+run_date: "2026-10-03"
 
 # API Keys
 # You can also set these as environment variables:
 #   FRED_API_KEY and ANTHROPIC_API_KEY
-fred_api_key: ""        # Leave blank — loaded from .env or FRED_API_KEY env var
-anthropic_api_key: ""   # Leave blank — loaded from .env or ANTHROPIC_API_KEY env var
+fred_api_key: ""        # Leave blank — loaded from .env
+anthropic_api_key: ""   # Leave blank — loaded from .env
 
 # ============================================================
 # FORECAST TARGETS
