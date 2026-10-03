@@ -90,8 +90,8 @@ forecast:
   enabled: true
   horizon_months: 24
   # Optional local copy of NY Fed ACMTermPremium.xls (if the automatic download is blocked).
-  # null → try download, fall back to Kim-Wright (THREEFYTP10).
-  acm_file: null
+  # null → try download, fall back to Kim-Wright (THREEFYTP10). Refresh the file each quarter.
+  acm_file: "ACMTermPremium.xls"   # path relative to the repo root
 
   # ---- 1. Policy-rate scenarios (最重要的主观输入) --------------------------
   # fed_funds / boc_rate: expected policy rate (%) at the END of each period.
@@ -143,12 +143,13 @@ forecast:
   neutral_boc_rate: null
   expectations:
     convergence_halflife_months: 36   # how fast short rates converge to neutral beyond the horizon
-    basis_halflife_months: 12         # how fast today's model-vs-market gap fades
+    basis_halflife_months: 36         # how fast today's market-vs-your-neutral gap fades
+                                      # (short = market converges to YOUR neutral view quickly)
 
   # ---- 3. Term premium -----------------------------------------------------------
   term_premium:
     target: "historical"        # number (e.g. 0.75) = subjective view | "historical" | "regression"
-    historical_window_years: 10
+    historical_window_years: 30   # 10y window is dominated by QE-era negative term premia
     halflife_months: null       # null = estimated AR(1) speed
     drivers:                    # used when target = "regression" (null/omitted → latest value)
       # deficit_gdp: -6.5       # federal deficit % GDP (negative = deficit)

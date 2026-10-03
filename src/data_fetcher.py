@@ -166,7 +166,11 @@ def fetch_acm(start: str, local_file: str | None = None) -> pd.DataFrame:
     import io
 
     if local_file:
-        content = open(local_file, "rb").read()
+        from pathlib import Path
+        path = Path(local_file)
+        if not path.is_absolute():  # relative paths are relative to the repo root
+            path = Path(__file__).resolve().parents[1] / path
+        content = path.read_bytes()
     else:
         resp = requests.get(ACM_URL, timeout=60, headers={"User-Agent": "Mozilla/5.0"})
         resp.raise_for_status()
@@ -180,7 +184,11 @@ def fetch_acm(start: str, local_file: str | None = None) -> pd.DataFrame:
             "NY Fed returned a web page instead of the Excel file. Download "
             "ACMTermPremium.xls manually from newyorkfed.org (ACM term premia page) and set "
             "forecast.acm_file in the config; Kim-Wright is used meanwhile")
-    raw = pd.read_excel(io.BytesIO(content), sheet_name=0, engine=engine)
+    # The workbook has "ACM Monthly" (month-end) and "ACM Daily" sheets; use daily so the
+    # monthly averages are consistent with the other market series.
+    book = pd.ExcelFile(io.BytesIO(content), engine=engine)
+    sheet = next((s for s in book.sheet_names if "daily" in s.lower()), book.sheet_names[0])
+    raw = book.parse(sheet)
     raw["DATE"] = pd.to_datetime(raw["DATE"], format="mixed", dayfirst=True)
     raw = raw.set_index("DATE").sort_index()
     out = raw[["ACMTP10", "ACMRNY10"]].rename(
