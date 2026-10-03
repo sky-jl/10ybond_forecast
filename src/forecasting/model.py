@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 SCENARIO_COLUMNS = [
     "fed_funds", "boc_rate", "policy_diff",
-    "us_expectations", "us_basis", "us_tp", "us_overlay", "us_10y",
+    "us_expectations", "us_basis", "us_tp", "us_fiscal", "us_overlay", "us_10y",
     "ca_spread", "ca_overlay", "canada_10y",
 ]
 
@@ -55,7 +55,8 @@ class ForecastResult:
             "scenario_end_us_10y": {n: round(float(s["us_10y"].iloc[-1]), 2) for n, s in self.scenarios.items()},
             "scenario_end_canada_10y": {n: round(float(s["canada_10y"].iloc[-1]), 2) for n, s in self.scenarios.items()},
             "end_components_central": self.central.iloc[-1][
-                ["fed_funds", "boc_rate", "us_expectations", "us_basis", "us_tp", "us_overlay", "ca_spread"]
+                ["fed_funds", "boc_rate", "us_expectations", "us_basis", "us_tp", "us_fiscal", "us_overlay",
+                 "ca_spread"]
             ].round(2).to_dict(),
             "params": self.params,
         }
@@ -99,6 +100,8 @@ def project_scenarios(df: pd.DataFrame, config: dict, fcfg: dict | None = None) 
 
     tp_cfg = dict(fcfg.get("term_premium", {}))
     tp_base, tp_info = term_premium.tp_path(df, H, tp_cfg)
+    fiscal_cfg = tp_cfg.get("fiscal") or {}
+    fiscal_bps, fiscal_info = term_premium.fiscal_impact(df, fiscal_cfg)
 
     sp_cfg = fcfg.get("canada_spread", {})
     try:
@@ -128,14 +131,16 @@ def project_scenarios(df: pd.DataFrame, config: dict, fcfg: dict | None = None) 
         boc = anchored_path(sc.get("boc_rate"), float(last["boc_rate"]), idx) if sc.get("boc_rate") \
             else policy_path.boc_model_path(df, fed, idx, boc_n, taylor_used["rho"],
                                             float(fcfg.get("boc_fed_passthrough", 0.5)))
-        paths[name] = {"fed": fed, "boc": boc,
+        sc_fiscal = (term_premium.fiscal_impact(df, fiscal_cfg, sc["fiscal"])[0]
+                     if sc.get("fiscal") else fiscal_bps)
+        paths[name] = {"fed": fed, "boc": boc, "fiscal_bps": sc_fiscal,
                        "tp_target": term_premium.scenario_target(df, tp_cfg, sc)}
         probs[name] = float(sc.get("probability", 1.0))
 
     ms = fcfg.get("model_scenario", {"include": True, "probability": 0.0})
     if ms.get("include", True) and (ms.get("probability", 0) > 0 or not paths):
         name = ms.get("name", "Model (Taylor rule)")
-        paths[name] = {"fed": fed_model, "boc": boc_model, "tp_target": None}
+        paths[name] = {"fed": fed_model, "boc": boc_model, "tp_target": None, "fiscal_bps": fiscal_bps}
         probs[name] = float(ms.get("probability", 1.0)) if paths.keys() - {name} else 1.0
     probs = _normalise_probs(probs)
 
@@ -151,24 +156,26 @@ def project_scenarios(df: pd.DataFrame, config: dict, fcfg: dict | None = None) 
             tp = p["tp_target"] + (tp_base[0] - p["tp_target"]) * tp_info["phi"] ** h
         else:
             tp = tp_base
-        us = exp + basis + tp + us_ov
+        fis = term_premium.fiscal_path(H, p["fiscal_bps"])
+        us = exp + basis + tp + fis + us_ov
         if rny0 is None:  # no term-premium data: pin h=0 to the observed yield via the basis
             basis = basis + (float(last["us_10y"]) - us[0]) * expectations.decay(h, basis_hl)
-            us = exp + basis + tp + us_ov
+            us = exp + basis + tp + fis + us_ov
         pdiff = p["boc"] - p["fed"]
         spread = (canada.spread_path(df, pdiff, sp_params, sp_cfg) if sp_params
                   else np.full(H + 1, np.nan))
         ca = us + spread + ca_ov
         out[name] = pd.DataFrame({
             "fed_funds": p["fed"], "boc_rate": p["boc"], "policy_diff": pdiff,
-            "us_expectations": exp, "us_basis": basis, "us_tp": tp, "us_overlay": us_ov,
+            "us_expectations": exp, "us_basis": basis, "us_tp": tp, "us_fiscal": fis, "us_overlay": us_ov,
             "us_10y": us, "ca_spread": spread, "ca_overlay": ca_ov, "canada_10y": ca,
         }, index=idx)[SCENARIO_COLUMNS]
 
     params = {
         "neutral_fed_funds": round(fed_n, 3), "neutral_boc_rate": round(boc_n, 3),
         "convergence_halflife_months": conv_hl, "basis_halflife_months": basis_hl,
-        "taylor_rule": taylor_used, "term_premium": tp_info,
+        "taylor_rule": taylor_used, "term_premium": tp_info, "fiscal": fiscal_info,
+        "fiscal_by_scenario_bps": {n: round(p["fiscal_bps"], 1) for n, p in paths.items()},
         "canada_spread": {k: round(v, 4) for k, v in (sp_params or {}).items()},
     }
     return out, probs, params, idx

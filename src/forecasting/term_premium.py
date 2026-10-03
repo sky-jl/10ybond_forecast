@@ -6,6 +6,8 @@ TP_{t+h} = target + (TP_t - target) * phi^h
 target options (config `forecast.term_premium.target`):
   - a number (%)        → subjective view, e.g. 0.75
   - "historical"        → trailing N-year mean of the term premium (default)
+  - "current"           → hold today's term premium: keeps the fiscal / risk premia already priced
+                          (use with the fiscal-outlook revision for any further change)
   - "regression"        → fiscal "fair value": OLS of TP on
                             debt held by the public / GDP, federal deficit / GDP,
                             Fed balance sheet / GDP (QE absorbs duration — controls the debt link),
@@ -107,6 +109,9 @@ def tp_target(df: pd.DataFrame, cfg: dict, fit: dict | None = None) -> tuple[flo
     window = int(cfg.get("historical_window_years", 10))
     if isinstance(target, (int, float)):
         base, info = float(target), {"method": "user"}
+    elif target == "current":
+        # Keep today's term premium — including the fiscal / risk premia the market already prices
+        base, info = float(df["us_tp"].dropna().iloc[-1]), {"method": "hold_current"}
     elif target == "regression":
         try:
             base, rinfo = regression_target(df, cfg.get("drivers"), fit)
@@ -114,7 +119,7 @@ def tp_target(df: pd.DataFrame, cfg: dict, fit: dict | None = None) -> tuple[flo
         except ValueError as exc:
             logger.warning("TP regression unavailable (%s); using historical mean", exc)
             target = "historical"
-    if not isinstance(target, (int, float)) and target != "regression":
+    if not isinstance(target, (int, float)) and target not in ("regression", "current"):
         tp = df["us_tp"].dropna()
         tp = tp[tp.index >= tp.index[-1] - pd.DateOffset(years=window)]
         base, info = float(tp.mean()), {"method": f"historical_{window}y"}
@@ -159,3 +164,58 @@ def scenario_target(df: pd.DataFrame, cfg: dict, sc: dict) -> float | None:
         base, _ = tp_target(df, {**cfg, "addons_bps": {}})
         return base + add
     return None
+
+
+# --------------------------------------------------------------------------- fiscal elasticity
+# Markets are forward-looking: the known baseline (e.g. CBO's rising debt path) is already in
+# today's yields. Only REVISIONS to the fiscal outlook move yields. Literature elasticities for a
+# revision to *projected* deficits / debt (Laubach 2009, JEEA; Gamber & Seliski 2019, CBO):
+# ~+20–30 bp per 1 pp of GDP wider projected deficit, ~+2–4 bp per 1 pp higher projected debt/GDP.
+# The two measures overlap (deficits accumulate into debt), so "average" uses their mean.
+FISCAL_DEFAULTS = {
+    "bps_per_pp_deficit": 25.0,
+    "bps_per_pp_debt": 3.0,
+    "measure": "average",          # "deficit" | "debt" | "average"
+}
+
+
+def _latest(df: pd.DataFrame, col: str) -> float | None:
+    if col in df and df[col].notna().any():
+        return float(df[col].dropna().iloc[-1])
+    return None
+
+
+def fiscal_impact(df: pd.DataFrame, cfg: dict | None, override: dict | None = None) -> tuple[float, dict]:
+    """
+    Fiscal premium (bps) at the horizon end from YOUR expected revision to the fiscal outlook
+    versus the current baseline that markets already price (e.g. today's CBO projections):
+      deficit_revision_pp: + = projected deficit wider than the baseline (pp of GDP)
+      debt_revision_pp:    + = projected debt/GDP higher than the baseline (pp)
+    No revision → 0 bp.
+    """
+    p = {**FISCAL_DEFAULTS, **(cfg or {}), **(override or {})}
+    if p.get("enabled") is False:
+        return 0.0, {"enabled": False}
+    d_rev = p.get("deficit_revision_pp")
+    debt_rev = p.get("debt_revision_pp")
+    from_deficit = p["bps_per_pp_deficit"] * float(d_rev or 0.0)
+    from_debt = p["bps_per_pp_debt"] * float(debt_rev or 0.0)
+    measure = p.get("measure", "average")
+    if measure == "deficit":
+        total = from_deficit
+    elif measure == "debt":
+        total = from_debt
+    else:
+        used = [v for v, set_ in ((from_deficit, bool(d_rev)), (from_debt, bool(debt_rev))) if set_]
+        total = float(np.mean(used)) if used else 0.0
+    info = {"measure": measure, "deficit_revision_pp": d_rev, "debt_revision_pp": debt_rev,
+            "latest_balance_gdp": _latest(df, "deficit_gdp"), "latest_debt_gdp": _latest(df, "debt_gdp"),
+            "from_deficit_bps": round(from_deficit, 1), "from_debt_bps": round(from_debt, 1),
+            "bps_per_pp_deficit": p["bps_per_pp_deficit"], "bps_per_pp_debt": p["bps_per_pp_debt"],
+            "fiscal_premium_bps": round(total, 1)}
+    return float(total), info
+
+
+def fiscal_path(horizon: int, bps: float) -> np.ndarray:
+    """Fiscal premium phased in linearly over the horizon (outlook revisions arrive gradually)."""
+    return np.linspace(0.0, bps / 100.0, horizon + 1)

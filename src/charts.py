@@ -292,6 +292,10 @@ def chart_forecast_decomposition(result, output_dir: Path) -> str:
     exp_basis = c["us_expectations"] + c["us_basis"]
     ax.fill_between(c.index, 0, exp_basis, color=BLUE, alpha=0.35,
                     label="Expected avg short rate (+ basis)")
+    if "us_fiscal" in c and c["us_fiscal"].abs().max() > 1e-9:
+        top = exp_basis + c["us_tp"]
+        ax.fill_between(c.index, top, top + c["us_fiscal"], color="#E34948", alpha=0.45,
+                        label="Fiscal premium")
     ax.fill_between(c.index, exp_basis, exp_basis + c["us_tp"], color=ORANGE, alpha=0.45,
                     label="Term premium")
     if c["us_overlay"].abs().max() > 1e-9:

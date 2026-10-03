@@ -56,10 +56,17 @@ Canada 10Y = US 10Y  +  Canada–US spread  +  overlay
   US 10Y change split three ways — expectations vs term premium, real yield vs breakeven, 2Y vs
   2s10s — with Fed funds, 5y5y inflation, oil, USD and VIX, plus a rule-based reading of what the
   market traded (Fed path, inflation/energy, or term premium/fiscal).
-- **Fiscal fair value of the term premium** (`term_premium.py`): TP regressed on debt held by the
-  public/GDP, deficit/GDP, Fed balance sheet/GDP (QE/QT control) and rate volatility. Set
-  `term_premium.target: regression` and your horizon `drivers` (e.g. CBO debt/deficit path); per
-  scenario via `tp_drivers`.
+- **Fiscal premium** (`term_premium.fiscal`, sidebar *Fiscal outlook*): markets already price the
+  known fiscal path (e.g. CBO's rising debt/GDP), so only a **revision** to the outlook moves yields.
+  Enter how much wider the projected deficit / higher the projected debt will be versus today's
+  baseline; literature elasticities (~25 bp per 1pp deficit, ~3 bp per 1pp debt/GDP; Laubach 2009)
+  turn it into a separate *fiscal premium* component, phased in over the horizon. Per scenario via
+  `fiscal: {deficit_revision_pp, debt_revision_pp}`.
+- **Today's term premium already contains the priced fiscal premium.** TP target `historical`
+  assumes it fades; `current` keeps it; the fiscal premium adds only new fiscal news on top.
+- **Historical fiscal relationship** (diagnostic): TP regressed on debt/GDP, deficit/GDP, Fed
+  balance sheet/GDP and rate volatility; the gap between today's TP and that relationship measures
+  the excess risk premium the market demands now.
 - **Named risk-premium add-ons** (`term_premium.addons_bps`, per scenario `tp_addons_bps`):
   Fed independence, geopolitics, energy-inflation risk, fiscal supply — in bps, shown by name in the
   report.

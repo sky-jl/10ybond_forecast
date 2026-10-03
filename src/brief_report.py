@@ -52,7 +52,7 @@ BRIEF_SCHEMA = {
                              "term premium/fiscal) based on the attribution numbers"},
         "macro_backdrop": {"type": "array", "items": {"type": "string"}, "description":
                            "3-4 bullets on macro drivers of the outlook: fiscal deficits/debt and issuance "
-                           "(use the fiscal fair value), Fed policy and independence, energy, geopolitics"},
+                           "(use fiscal_premium: the forecaster's revision to the fiscal outlook vs the baseline markets already price, × elasticity; and the TP gap vs its historical relationship), Fed policy and independence, energy, geopolitics"},
         "us_analysis": {"type": "array", "items": {"type": "string"},
                         "description": "3-4 bullets on US 10Y drivers: policy path, term premium, anchors"},
         "canada_analysis": {"type": "array", "items": {"type": "string"},
@@ -75,7 +75,9 @@ The forecast comes from a structural model (10Y = expected average short rate + 
 Canada 10Y = US 10Y + Canada–US spread) with forecaster-chosen policy scenarios, so describe it as
 a scenario-weighted view, not a certainty. Be candid that 10Y yields rarely beat a random walk in
 backtests. Give the macro view equal weight to the technical one: explain the move through fiscal
-deficits, debt and Treasury supply (the term premium vs its fiscal fair value), Fed policy and
+deficits, debt and Treasury supply (the fiscal premium from the forecaster's revision to the fiscal
+outlook — the known baseline path is already priced — and the term premium's gap over its
+historical relationship as a measure of risk premia), Fed policy and
 independence (5y5y inflation expectations), energy prices and geopolitics, using the attribution
 of last quarter's move. You have no live news feed: rely on the numbers and the forecaster's macro
 themes, and do not invent specific events or dates. Write in plain professional English, no
@@ -105,7 +107,7 @@ def build_context(result, config: dict, backtest_summary: pd.DataFrame | None = 
         },
         "us_decomposition_change_bps": {
             k: round(float((c[k].iloc[-1] - c[k].iloc[0]) * 100))
-            for k in ("us_expectations", "us_basis", "us_tp", "us_overlay", "us_10y")
+            for k in ("us_expectations", "us_basis", "us_tp", "us_fiscal", "us_overlay", "us_10y") if k in c
         },
         "quarterly_weighted": {
             idx: {"us_10y": round(float(r["us_10y"]), 2), "canada_10y": round(float(r["canada_10y"]), 2),
@@ -133,6 +135,8 @@ def build_context(result, config: dict, backtest_summary: pd.DataFrame | None = 
         "term_premium_fiscal": _round({k: v for k, v in (result.params.get("term_premium", {})
                                                           .get("fiscal_fair_value") or {}).items()}),
         "term_premium_addons_bps": result.params.get("term_premium", {}).get("addons_bps", {}),
+        "fiscal_premium": _round(result.params.get("fiscal", {})),
+        "fiscal_premium_by_scenario_bps": result.params.get("fiscal_by_scenario_bps", {}),
         "macro_themes": config.get("macro_themes", []),
         "forecaster_risks": config.get("medium_term_risks", {}),
     }
@@ -201,7 +205,10 @@ def template_commentary(ctx: dict) -> dict:
             f"Expected short-rate component changes {d['us_expectations']:+d} bps; the market-vs-neutral gap "
             f"contributes {d['us_basis']:+d} bps as it converges toward the {ctx['anchors']['neutral_fed_funds']}% neutral rate.",
             f"Term premium moves from {cur['us_tp']:.2f}% to {end['us_tp']:.2f}% ({d['us_tp']:+d} bps).",
-        ],
+        ] + ([f"Fiscal premium adds {d['us_fiscal']:+d} bps from the forecaster's fiscal-outlook revision "
+              f"(deficit {ctx['fiscal_premium'].get('from_deficit_bps', 0):+.0f} bp, debt "
+              f"{ctx['fiscal_premium'].get('from_debt_bps', 0):+.0f} bp)."]
+             if d.get("us_fiscal") else []),
         "canada_analysis": [
             f"BoC path: {cur['boc_rate']:.2f}% to {end['boc_rate']:.2f}%; Canada–US spread from "
             f"{cur['ca_spread']:+.2f} to {end['ca_spread']:+.2f} pp.",
@@ -289,6 +296,10 @@ def chart_decomposition(result) -> io.BytesIO:
     base = c["us_expectations"] + c["us_basis"]
     ax.fill_between(c.index, 0, base, color=SERIES[0], alpha=0.45, lw=0, label="Expected short rate + gap")
     ax.fill_between(c.index, base, base + c["us_tp"], color=SERIES[1], alpha=0.55, lw=0, label="Term premium")
+    if "us_fiscal" in c and c["us_fiscal"].abs().max() > 1e-9:
+        top = base + c["us_tp"]
+        ax.fill_between(c.index, top, top + c["us_fiscal"], color="#e34948", alpha=0.55, lw=0,
+                        label="Fiscal premium")
     ax.plot(c.index, c["us_10y"], color="#0b0b0b", lw=1.6, label="US 10Y")
     ax.plot(c.index, c["fed_funds"], color=SERIES[2], lw=1.2, label="Fed funds")
     lo = min(c["fed_funds"].min(), base.min())

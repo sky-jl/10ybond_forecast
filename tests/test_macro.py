@@ -44,3 +44,35 @@ def test_scenario_fiscal_drivers(monthly, config):
     tp_end = {n: s["us_tp"].iloc[-1] for n, s in r.scenarios.items()}
     assert tp_end["Hawkish"] > tp_end["Base"]
     assert np.isfinite(list(tp_end.values())).all()
+
+
+def test_fiscal_elasticity_impact(monthly, config):
+    from forecasting.term_premium import fiscal_impact
+    cfg = {"deficit_revision_pp": 1.0, "debt_revision_pp": 6.0}
+    assert fiscal_impact(monthly, {**cfg, "measure": "deficit"})[0] == pytest.approx(25.0)
+    assert fiscal_impact(monthly, {**cfg, "measure": "debt"})[0] == pytest.approx(18.0)
+    assert fiscal_impact(monthly, cfg)[0] == pytest.approx(21.5)          # average
+    assert fiscal_impact(monthly, {})[0] == 0.0                           # no revision → priced already
+    assert fiscal_impact(monthly, {**cfg, "enabled": False})[0] == 0.0
+    assert fiscal_impact(monthly, {"deficit_revision_pp": -1.0})[0] == pytest.approx(-25.0)
+
+
+def test_fiscal_premium_component_and_scenario_override(monthly, config):
+    cfg = copy.deepcopy(config)
+    cfg["forecast"]["term_premium"]["fiscal"] = {"debt_revision_pp": 10, "measure": "debt"}
+    cfg["forecast"]["scenarios"][1]["fiscal"] = {"debt_revision_pp": 20}
+    r = run_forecast(monthly, cfg, with_fan=False)
+    base, hawk = r.scenarios["Base"], r.scenarios["Hawkish"]
+    assert base["us_fiscal"].iloc[0] == 0.0
+    assert base["us_fiscal"].iloc[-1] == pytest.approx(0.30)               # 10pp × 3bp, phased in
+    assert hawk["us_fiscal"].iloc[-1] == pytest.approx(0.60)
+    assert r.params["fiscal_by_scenario_bps"]["Hawkish"] == pytest.approx(60.0)
+
+
+def test_hold_current_tp_target(monthly, config):
+    cfg = copy.deepcopy(config)
+    cfg["forecast"]["term_premium"] = {"target": "current"}
+    r = run_forecast(monthly, cfg, with_fan=False)
+    tp = r.scenarios["Base"]["us_tp"]
+    assert tp.iloc[-1] == pytest.approx(tp.iloc[0])
+    assert r.params["term_premium"]["method"] == "hold_current"

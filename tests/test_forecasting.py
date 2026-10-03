@@ -13,7 +13,7 @@ from forecasting.utils import anchored_path, horizon_index, overlay_path, parse_
 def test_identity_components_sum_to_yield(monthly, config):
     r = run_forecast(monthly, config, with_fan=False)
     for sc in r.scenarios.values():
-        us = sc["us_expectations"] + sc["us_basis"] + sc["us_tp"] + sc["us_overlay"]
+        us = sc["us_expectations"] + sc["us_basis"] + sc["us_tp"] + sc["us_fiscal"] + sc["us_overlay"]
         np.testing.assert_allclose(us, sc["us_10y"])
         np.testing.assert_allclose(sc["us_10y"] + sc["ca_spread"] + sc["ca_overlay"], sc["canada_10y"])
 

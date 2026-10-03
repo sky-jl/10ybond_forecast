@@ -191,9 +191,14 @@ tp_fit = cached_tp_fit(df, f"{data_path}|{synthetic}|{df.index[-1]}|{len(df)}")
 with sb.expander("Term premium (fiscal & macro risk)", expanded=True):
     tp_cfg = fbase.get("term_premium", {})
     tp_default = tp_cfg.get("target", "historical")
-    modes = ["Your view (number)", "Historical mean", "Fiscal fair value (regression)"]
-    mode_idx = 0 if isinstance(tp_default, (int, float)) else (2 if tp_default == "regression" else 1)
-    tp_mode = st.radio("Target", modes, index=mode_idx, horizontal=False)
+    modes = ["Your view (number)", "Historical mean", "Historical fiscal relationship (regression)",
+             "Hold current (keep priced fiscal/risk premia)"]
+    mode_idx = (0 if isinstance(tp_default, (int, float)) else 2 if tp_default == "regression"
+                else 3 if tp_default == "current" else 1)
+    tp_mode = st.radio("Target", modes, index=mode_idx, horizontal=False,
+                       help="Today's term premium already contains the fiscal premium markets price. "
+                            "Historical mean assumes it fades; Hold current assumes it persists. The fiscal-"
+                            "outlook revision below adds only NEW fiscal news on top.")
     tp_now = float(df["us_tp"].dropna().iloc[-1]) if "us_tp" in df else np.nan
     st.caption(f"Current term premium: **{tp_now:.2f}%**")
     tp_value = st.number_input("Term premium target (%)", -3.0, 5.0,
@@ -206,9 +211,12 @@ with sb.expander("Term premium (fiscal & macro risk)", expanded=True):
         st.caption(f"→ mean over {tp_window}y: **{tp[tp.index >= tp.index[-1] - pd.DateOffset(years=tp_window)].mean():.2f}%**")
     tp_drivers = {}
     if tp_fit:
-        st.caption(f"Fiscal fair value today: **{tp_fit['fair_value_now']:.2f}%** "
-                   f"(actual {tp_fit['tp_now']:.2f}%, {tp_fit['residual_now_bps']:+.0f} bps gap)")
+        st.caption(f"Historical-relationship value: **{tp_fit['fair_value_now']:.2f}%** "
+                   f"(actual {tp_fit['tp_now']:.2f}% → {tp_fit['residual_now_bps']:+.0f} bps excess premium)")
     if tp_mode == modes[2]:
+        st.warning("Historical-relationship target: 2003–2020 QE years pulled TP down while debt rose, so this "
+                   "fair value tends to sit far below today's TP. Prefer a number or the historical mean plus "
+                   "the fiscal-elasticity premium below.", icon="⚠️")
         if not tp_fit:
             st.warning("Fiscal driver data not available — falls back to the historical mean.")
         else:
@@ -232,6 +240,41 @@ with sb.expander("Term premium (fiscal & macro risk)", expanded=True):
     tp_hl_on = st.checkbox("Set adjustment half-life manually", value=bool(tp_cfg.get("halflife_months")))
     tp_hl = st.slider("TP half-life (months)", 3, 120, int(tp_cfg.get("halflife_months") or 24), 3,
                       disabled=not tp_hl_on)
+
+with sb.expander("Fiscal outlook (elasticity)", expanded=True):
+    fis_cfg = (fbase.get("term_premium") or {}).get("fiscal") or {}
+    bal_now = float(df["deficit_gdp"].dropna().iloc[-1]) if "deficit_gdp" in df and df["deficit_gdp"].notna().any() else None
+    debt_now = float(df["debt_gdp"].dropna().iloc[-1]) if "debt_gdp" in df and df["debt_gdp"].notna().any() else None
+    st.caption("Markets already price the known fiscal path (e.g. CBO's rising debt). Only a **revision** "
+               "moves yields: enter how much worse (+) or better (−) you expect the projected deficit / "
+               f"debt to become versus today's baseline. Phased in to {horizon_end}.")
+    fis_on = st.toggle("Include fiscal premium", value=fis_cfg.get("enabled", True))
+    fc1, fc2 = st.columns(2)
+    d_rev = fc1.number_input("Deficit revision (pp GDP, + = wider)", -10.0, 10.0,
+                             float(fis_cfg.get("deficit_revision_pp") or 0.0), 0.1, format="%.1f",
+                             disabled=not fis_on)
+    debt_rev = fc2.number_input("Debt/GDP revision (pp, + = higher)", -50.0, 50.0,
+                                float(fis_cfg.get("debt_revision_pp") or 0.0), 0.5, format="%.1f",
+                                disabled=not fis_on)
+    ec1, ec2 = st.columns(2)
+    el_def = ec1.number_input("bp per 1pp deficit", 0.0, 100.0,
+                              float(fis_cfg.get("bps_per_pp_deficit", 25.0)), 1.0, disabled=not fis_on)
+    el_debt = ec2.number_input("bp per 1pp debt/GDP", 0.0, 20.0,
+                               float(fis_cfg.get("bps_per_pp_debt", 3.0)), 0.5, disabled=not fis_on)
+    measures = {"Average of both": "average", "Deficit only": "deficit", "Debt only": "debt"}
+    m_default = {v: k for k, v in measures.items()}.get(fis_cfg.get("measure", "average"), "Average of both")
+    fis_measure = measures[st.radio("Measure (they overlap — deficits become debt)", list(measures),
+                                    index=list(measures).index(m_default), disabled=not fis_on)]
+    if bal_now is not None or debt_now is not None:
+        st.caption(f"Context — latest data: balance **{bal_now if bal_now is not None else float('nan'):.1f}%** "
+                   f"of GDP, debt **{debt_now if debt_now is not None else float('nan'):.1f}%** of GDP")
+    fiscal_ui = {"enabled": fis_on, "deficit_revision_pp": d_rev, "debt_revision_pp": debt_rev,
+                 "bps_per_pp_deficit": el_def, "bps_per_pp_debt": el_debt, "measure": fis_measure}
+    if fis_on:
+        from forecasting.term_premium import fiscal_impact
+        _bps, _fi = fiscal_impact(df, fiscal_ui)
+        st.markdown(f"→ **Fiscal premium {_bps:+.0f} bp** by {horizon_end} "
+                    f"(deficit leg {_fi['from_deficit_bps']:+.0f} bp · debt leg {_fi['from_debt_bps']:+.0f} bp)")
 
 with sb.expander("Canada–US spread"):
     sp_cfg = fbase.get("canada_spread", {})
@@ -324,10 +367,12 @@ f["neutral_boc_rate"] = neutral_boc
 f["expectations"] = {"convergence_halflife_months": conv_hl, "basis_halflife_months": basis_hl}
 f["term_premium"] = {
     **(fbase.get("term_premium") or {}),
-    "target": tp_value if tp_mode == modes[0] else ("regression" if tp_mode == modes[2] else "historical"),
+    "target": (tp_value if tp_mode == modes[0] else "regression" if tp_mode == modes[2]
+               else "current" if tp_mode == modes[3] else "historical"),
     "historical_window_years": tp_window,
     "halflife_months": tp_hl if tp_hl_on else None,
     "drivers": tp_drivers or (fbase.get("term_premium") or {}).get("drivers"),
+    "fiscal": fiscal_ui,
     "addons_bps": {k: v for k, v in addons.items() if v},
 }
 f["canada_spread"] = {**(fbase.get("canada_spread") or {}), "target": sp_value if sp_fixed else "model"}
@@ -390,16 +435,17 @@ def decomposition_chart() -> go.Figure:
     parts = [("us_expectations", "Expected avg short rate", SLOTS[0]),
              ("us_basis", "Market-vs-neutral gap", SLOTS[6]),
              ("us_tp", "Term premium", SLOTS[1]),
+             ("us_fiscal", "Fiscal premium", SLOTS[7]),
              ("us_overlay", "Judgmental overlay", SLOTS[3])]
     for colname, nm, colr in parts:
-        if colname == "us_overlay" and c[colname].abs().max() < 1e-9:
+        if colname in ("us_overlay", "us_fiscal") and c[colname].abs().max() < 1e-9:
             continue
         fig.add_trace(go.Bar(x=c.index, y=c[colname], name=nm, marker=dict(color=colr),
                              hovertemplate="%{y:.2f}"))
     fig.add_trace(go.Scatter(x=c.index, y=c["us_10y"], name="US 10Y forecast",
                              line=dict(color=INK, width=2.5), hovertemplate="%{y:.2f}%"))
     fig.update_layout(barmode="relative", bargap=0.15)
-    return base_layout(fig, "US 10Y = expectations + gap + term premium (+ overlay)")
+    return base_layout(fig, "US 10Y = expectations + gap + term premium + fiscal premium (+ overlay)")
 
 
 def policy_chart(col: str, label: str) -> go.Figure:
@@ -428,11 +474,13 @@ with tabs[1]:
                f"**{beta:.2f}**" if beta is not None else "")
 with tabs[2]:
     st.plotly_chart(decomposition_chart(), theme="streamlit")
-    e = res.central.iloc[[0, -1]][["us_expectations", "us_basis", "us_tp", "us_overlay", "us_10y"]].T
+    e = res.central.iloc[[0, -1]][["us_expectations", "us_basis", "us_tp", "us_fiscal", "us_overlay",
+                                   "us_10y"]].T
     e.columns = ["Now", end_label]
     e["Change (bps)"] = (e[end_label] - e["Now"]) * 100
     st.dataframe(e.rename(index={"us_expectations": "Expected avg short rate", "us_basis": "Market-vs-neutral gap",
-                                 "us_tp": "Term premium", "us_overlay": "Overlay", "us_10y": "US 10Y"})
+                                 "us_tp": "Term premium", "us_fiscal": "Fiscal premium",
+                                 "us_overlay": "Overlay", "us_10y": "US 10Y"})
                  .style.format({"Now": "{:.2f}", end_label: "{:.2f}", "Change (bps)": "{:+.0f}"}),
                  width="stretch")
 with tabs[3]:
@@ -443,6 +491,7 @@ with tabs[4]:
     q = res.quarterly
     show = ["fed_funds", "us_10y", "us_10y_p10", "us_10y_p90", "boc_rate", "canada_10y",
             "canada_10y_p10", "canada_10y_p90", "us_tp", "ca_spread"]
+    show = [c for c in show if c in q.columns]
     st.markdown("**Quarterly averages (%)**")
     st.dataframe(q[show].style.format("{:.2f}"), width="stretch")
     st.download_button("Download quarterly CSV", q.to_csv().encode(), "forecast_quarterly.csv", "text/csv")
@@ -513,23 +562,27 @@ with tabs[8]:
         st.caption("Heuristic reading of the numbers, not causal identification — confirm against the "
                    "news flow (auctions, Fed communication, oil/geopolitics, fiscal announcements).")
 
-    st.markdown("### Fiscal fair value of the term premium")
+    st.markdown("### Term premium vs its historical fiscal relationship")
+    st.caption("The fiscal **premium** in the forecast comes from the projected fiscal path × elasticity "
+               "(sidebar → Fiscal path). This regression is a diagnostic: the **gap** shows how much risk "
+               "premium today's market demands beyond the 2003+ relationship with debt, deficits and the "
+               "Fed balance sheet — a gauge of fiscal / supply / inflation-uncertainty concerns.")
     if not tp_fit:
         st.info("Debt/deficit/Fed balance-sheet data not in the dataset — rerun `python forecast.py` to fetch it.")
     else:
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Term premium now", fmt_pct(tp_fit["tp_now"]))
-        m2.metric("Fiscal fair value", fmt_pct(tp_fit["fair_value_now"]))
-        m3.metric("Gap", f"{tp_fit['residual_now_bps']:+.0f} bps", delta_color="off")
+        m2.metric("Historical-relationship value", fmt_pct(tp_fit["fair_value_now"]))
+        m3.metric("Gap (excess risk premium)", f"{tp_fit['residual_now_bps']:+.0f} bps", delta_color="off")
         m4.metric("R²", f"{tp_fit['r2']:.2f}", help=f"{tp_fit['n']} months, {tp_fit['sample']}")
         fitted = tp_fit["fitted"]
         actual = res.history["us_tp"].reindex(fitted.index)
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=actual.index, y=actual, name="Term premium (actual)",
                                  line=dict(color=INK, width=1.6), hovertemplate="%{y:.2f}%"))
-        fig.add_trace(go.Scatter(x=fitted.index, y=fitted, name="Fiscal fair value (fitted)",
+        fig.add_trace(go.Scatter(x=fitted.index, y=fitted, name="Historical relationship (fitted)",
                                  line=dict(color=SLOTS[1], width=2), hovertemplate="%{y:.2f}%"))
-        st.plotly_chart(base_layout(fig, "Term premium vs fiscal fair value", 340), theme="streamlit")
+        st.plotly_chart(base_layout(fig, "Term premium vs historical fiscal relationship", 340), theme="streamlit")
         coef_rows = [{"Driver": DRIVER_LABELS.get(c, c), "Latest": f"{tp_fit['latest_drivers'][c]:.1f}",
                       "TP sensitivity (bps per unit)": f"{tp_fit['coef'][c] * 100:+.2f}"}
                      for c in tp_fit["drivers"]]

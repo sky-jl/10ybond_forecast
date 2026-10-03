@@ -154,7 +154,9 @@ forecast:
   # debt/GDP, deficit/GDP, Fed balance sheet/GDP (QE/QT) and rate volatility, evaluated at the
   # driver values YOU expect at the horizon end (e.g. CBO projections).
   term_premium:
-    target: "historical"        # number (e.g. 0.75) = subjective view | "historical" | "regression"
+    # NOTE: today's TP already includes the fiscal premium markets price. "historical" assumes it
+    # fades; "current" assumes it persists; the fiscal block below adds only NEW fiscal news.
+    target: "historical"        # number (e.g. 0.75) | "historical" | "current" | "regression"
     historical_window_years: 30   # 10y window is dominated by QE-era negative term premia
     halflife_months: null       # null = estimated AR(1) speed
     drivers:                    # used when target = "regression" (omitted → latest value)
@@ -164,6 +166,19 @@ forecast:
       # us_10y_rvol_12m: 7.0    # realised 10Y volatility, bps/day
     # Named risk-premium add-ons (bps, added to the TP target, phased in) for macro risks that a
     # regression can't capture. They are listed by name in the report.
+    # Fiscal premium: markets already price the KNOWN fiscal path (e.g. CBO's rising debt/GDP),
+    # so only a REVISION to the outlook moves yields. Enter how much worse (+) or better (−) you
+    # expect the projected deficit / debt to become versus today's baseline (CBO) by the horizon.
+    # Literature elasticities (Laubach 2009; CBO): ~25 bp per 1pp wider projected deficit,
+    # ~3 bp per 1pp higher projected debt/GDP. Phased in; shown as its own component.
+    # Scenarios can override:  fiscal: {deficit_revision_pp: 1.5, debt_revision_pp: 8}
+    fiscal:
+      enabled: true
+      deficit_revision_pp: 0      # + = projected deficit wider than today's baseline (pp of GDP)
+      debt_revision_pp: 0         # + = projected debt/GDP higher than today's baseline (pp)
+      bps_per_pp_deficit: 25
+      bps_per_pp_debt: 3
+      measure: "average"          # "average" | "deficit" | "debt" (they overlap: deficits become debt)
     addons_bps:
       fed_independence: 0       # e.g. 15 if political pressure on the Fed raises inflation risk
       geopolitics: 0

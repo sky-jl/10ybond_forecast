@@ -21,7 +21,7 @@ def _us_end(at):
 
 def test_app_runs_and_reacts_to_inputs():
     at = _run(st_testing.AppTest.from_file(APP))
-    assert any(m.label == "Fiscal fair value" for m in at.metric)       # macro tab rendered
+    assert any(m.label == "Historical-relationship value" for m in at.metric)   # macro tab rendered
     before = _us_end(at)
     neutral = next(s for s in at.sidebar.number_input if s.label.startswith("Fed neutral"))
     neutral.set_value(neutral.value + 1.0)
@@ -32,7 +32,8 @@ def test_app_runs_and_reacts_to_inputs():
 def test_fiscal_mode_and_addons_move_forecast():
     at = _run(st_testing.AppTest.from_file(APP))
     before = _us_end(at)
-    next(r for r in at.sidebar.radio if r.label == "Target").set_value("Fiscal fair value (regression)")
+    next(r for r in at.sidebar.radio if r.label == "Target").set_value(
+        "Historical fiscal relationship (regression)")
     _run(at)
     debt = next(n for n in at.sidebar.number_input if n.label.startswith("Debt held by public"))
     debt.set_value(debt.value + 20)
@@ -42,3 +43,13 @@ def test_fiscal_mode_and_addons_move_forecast():
     next(n for n in at.sidebar.number_input if n.label == "Fed independence").set_value(25)
     _run(at)
     assert _us_end(at) != after_fiscal
+
+
+def test_fiscal_path_inputs_move_forecast():
+    at = _run(st_testing.AppTest.from_file(APP))
+    before = _us_end(at)
+    debt = next(n for n in at.sidebar.number_input if n.label.startswith("Debt/GDP revision"))
+    debt.set_value(10.0)                     # +10pp debt/GDP revision → +30bp
+    _run(at)
+    assert _us_end(at) != before
+    assert any("Fiscal premium" in m.value for m in at.sidebar.markdown)
