@@ -22,3 +22,8 @@ __pycache__/
 .vscode/
 .idea/
 *.swp
+
+# Generated outputs — regenerate with `python forecast.py` / `python main.py`
+output/forecast/
+output/charts/
+# Quarterly Word reports are kept as an archive (output/*.docx)
