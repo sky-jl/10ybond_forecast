@@ -628,6 +628,7 @@ with tabs[8]:
         rc2.caption("Add ANTHROPIC_API_KEY to `.env` to enable research. You can still type themes below.")
 
     final_themes: list[str] = []
+    approved: list[dict] = []
     theme_sources: dict[str, dict] = {}
     r = st.session_state.get("research")
     if r:
@@ -648,6 +649,9 @@ with tabs[8]:
                 cc2.markdown(" · ".join(f"[{s_['title'][:70]}]({s_['url']})" for s_ in t.get("sources", [])))
                 if inc and txt.strip():
                     final_themes.append(txt.strip())
+                    approved.append({"theme": txt.strip(), "driver": t.get("driver"),
+                                     "direction": t.get("direction"), "evidence": t.get("evidence", ""),
+                                     "sources": [s_.get("title", "") for s_ in t.get("sources", [])]})
                     for s_ in t.get("sources", []):
                         theme_sources.setdefault(s_["url"], {"url": s_["url"], "title": s_.get("title", "")})
         with st.expander("All sources and research notes"):
@@ -657,8 +661,13 @@ with tabs[8]:
     manual = st.text_area("Your own themes (one per line)",
                           "\n".join(base_cfg.get("macro_themes", []) if not r else []), height=120,
                           key="manual_themes")
-    final_themes += [ln.strip() for ln in manual.splitlines() if ln.strip()]
+    final_themes += [ln.strip() for ln in manual.splitlines() if ln.strip()]  # noqa: manual themes
+    manual_list = [ln.strip() for ln in manual.splitlines() if ln.strip()]
+    approved += [{"theme": t_, "driver": "forecaster", "direction": "mixed", "evidence": "", "sources": []}
+                 for t_ in manual_list]
     cfg["macro_themes"] = final_themes
+    cfg["macro_research"] = {"quarter_summary": (r or {}).get("quarter_summary", ""), "themes": approved}
+    cfg["macro_research_notes"] = (r or {}).get("notes", "")
     cfg["macro_theme_sources"] = list(theme_sources.values())
     st.caption(f"**{len(final_themes)} theme(s)** will be used in the reports.")
 
@@ -667,9 +676,10 @@ with tabs[6]:
 
     from brief_report import MODEL, generate_brief
 
-    st.markdown("A concise **1–2 page PDF brief** of the current settings: headline call, KPI table, "
-                "fan charts, quarterly table, US decomposition, policy scenarios, Canada view, risks "
-                "and conclusion.")
+    st.markdown("A concise **3-page PDF brief** of the current settings: headline call, KPI table, "
+                "fan charts, quarterly table, what moved yields; macro backdrop and macro outlook "
+                "(built from the approved research themes); US decomposition, scenarios, Canada view, "
+                "risks and conclusion.")
     has_key = bool(os.environ.get("ANTHROPIC_API_KEY") or base_cfg.get("anthropic_api_key"))
     use_ai = st.toggle(f"Draft the commentary with Claude (`{MODEL}`)", value=has_key, disabled=not has_key,
                        help="Needs ANTHROPIC_API_KEY in .env. Off = factual template text from the numbers.")

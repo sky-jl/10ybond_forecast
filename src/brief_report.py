@@ -34,6 +34,7 @@ from reportlab.platypus import (  # noqa: E402
 logger = logging.getLogger(__name__)
 
 MODEL = "claude-opus-5-5"
+MAX_PAGES = 3
 
 NAVY = colors.HexColor("#1B4F8A")
 INK = colors.HexColor("#0b0b0b")
@@ -51,8 +52,30 @@ BRIEF_SCHEMA = {
                              "2-3 sentences: what the market traded last quarter (Fed path, inflation/energy, "
                              "term premium/fiscal) based on the attribution numbers"},
         "macro_backdrop": {"type": "array", "items": {"type": "string"}, "description":
-                           "3-4 bullets on macro drivers of the outlook: fiscal deficits/debt and issuance "
+                           "3-5 substantive bullets (up to ~50 words each; quality over quantity, no filler, "
+                           "do not repeat numbers already in the tables) on the macro drivers behind recent yields: "
+                           "fiscal deficits/debt and issuance "
                            "(use fiscal_premium: the forecaster's revision to the fiscal outlook vs the baseline markets already price, × elasticity; and the TP gap vs its historical relationship), Fed policy and independence, energy, geopolitics"},
+        "macro_outlook": {
+            "type": "object",
+            "properties": {
+                "overview": {"type": "string", "description":
+                             "90-130 words: the macro outlook for the next two years and what it means for "
+                             "10Y yields, grounded in the approved research themes and the model numbers"},
+                "pillars": {"type": "array", "description": "4-6 drivers, most important first",
+                            "items": {"type": "object", "properties": {
+                                "driver": {"type": "string", "enum": [
+                                    "fed_policy", "inflation_energy", "fiscal_supply", "fed_independence",
+                                    "geopolitics", "growth_labor", "canada", "global_rates"]},
+                                "view": {"type": "string", "description": "30-50 words: outlook and why"},
+                                "yield_impact": {"type": "string", "enum": ["higher", "lower", "neutral"]},
+                            }, "required": ["driver", "view", "yield_impact"], "additionalProperties": False}},
+                "watch_list": {"type": "array", "items": {"type": "string"}, "description":
+                               "3-5 signposts to monitor (types of data / events, no invented dates)"},
+            },
+            "required": ["overview", "pillars", "watch_list"],
+            "additionalProperties": False,
+        },
         "us_analysis": {"type": "array", "items": {"type": "string"},
                         "description": "3-4 bullets on US 10Y drivers: policy path, term premium, anchors"},
         "canada_analysis": {"type": "array", "items": {"type": "string"},
@@ -63,12 +86,12 @@ BRIEF_SCHEMA = {
                            "description": "2-3 risks that would push yields lower, with rough bps impact"},
         "conclusion": {"type": "string", "description": "2-3 sentences: forecast call and what would change it"},
     },
-    "required": ["headline", "summary", "market_narrative", "macro_backdrop", "us_analysis", "canada_analysis", "upside_risks",
+    "required": ["headline", "summary", "market_narrative", "macro_backdrop", "macro_outlook", "us_analysis", "canada_analysis", "upside_risks",
                  "downside_risks", "conclusion"],
     "additionalProperties": False,
 }
 
-SYSTEM_PROMPT = """You are a senior fixed-income strategist writing a concise two-page outlook for
+SYSTEM_PROMPT = """You are a senior fixed-income strategist writing a concise three-page outlook for
 the US 10-year Treasury and Government of Canada 10-year yields. Every claim must be grounded in
 the model output provided; cite specific numbers (levels in %, changes in bps, probabilities).
 The forecast comes from a structural model (10Y = expected average short rate + term premium;
@@ -79,10 +102,16 @@ deficits, debt and Treasury supply (the fiscal premium from the forecaster's rev
 outlook — the known baseline path is already priced — and the term premium's gap over its
 historical relationship as a measure of risk premia), Fed policy and
 independence (5y5y inflation expectations), energy prices and geopolitics, using the attribution
-of last quarter's move. You have no live news feed: rely on the numbers and the forecaster's macro
-themes, and do not invent specific events or dates. Write in plain professional English, no
-headers or markdown inside strings. The brief must fit two pages: keep the whole commentary under
-about 450 words — summary and narrative under 60 words each, each bullet under 30 words."""
+of last quarter's move. You have no live news feed: rely on the numbers, the forecaster-approved
+research themes (macro_research: theme, driver, direction, evidence, sources) and macro themes,
+plus the underlying cited research notes (research_notes) for detail. The approved themes are
+authoritative — never contradict the forecaster's edits; use the notes only to add evidence and
+depth. Build the macro backdrop and macro outlook mainly from this research — synthesise
+implications for yields, but do not invent events, dates or figures that are not in the input.
+Prefer fewer, substantive points over many thin ones; no filler. Write in plain
+professional English, no headers or markdown inside strings. The brief must fit three pages: keep
+the whole commentary under about 900 words — summary and narrative under 70 words each, macro
+bullets under 50 words, other bullets under 30 words."""
 
 
 # --------------------------------------------------------------------------- inputs
@@ -138,6 +167,8 @@ def build_context(result, config: dict, backtest_summary: pd.DataFrame | None = 
         "fiscal_premium": _round(result.params.get("fiscal", {})),
         "fiscal_premium_by_scenario_bps": result.params.get("fiscal_by_scenario_bps", {}),
         "macro_themes": config.get("macro_themes", []),
+        "macro_research": config.get("macro_research") or {},
+        "research_notes": (config.get("macro_research_notes") or "")[:8000],
         "forecaster_risks": config.get("medium_term_risks", {}),
     }
     if backtest_summary is not None and len(backtest_summary):
@@ -200,6 +231,7 @@ def template_commentary(ctx: dict) -> dict:
                     f"The {top} scenario carries the largest weight ({sc[top]['probability']:.0%})."),
         "market_narrative": " ".join((ctx.get("last_quarter_attribution") or {}).get("reading", [])[:3]),
         "macro_backdrop": _template_macro(ctx),
+        "macro_outlook": _template_outlook(ctx),
         "us_analysis": [
             f"Fed funds path: {cur['fed_funds']:.2f}% now to {end['fed_funds']:.2f}% (weighted) by {ctx['horizon_end']}.",
             f"Expected short-rate component changes {d['us_expectations']:+d} bps; the market-vs-neutral gap "
@@ -227,8 +259,8 @@ def _template_macro(ctx: dict) -> list[str]:
     fis = ctx.get("term_premium_fiscal") or {}
     if fis:
         d = fis.get("latest_drivers", {})
-        out.append(f"Term premium {fis.get('tp_now', 0):.2f}% vs fiscal fair value {fis.get('fair_value_now', 0):.2f}% "
-                   f"({fis.get('residual_now_bps', 0):+.0f} bps); debt held by public {d.get('debt_gdp', float('nan')):.0f}% "
+        out.append(f"Term premium {fis.get('tp_now', 0):.2f}% vs {fis.get('fair_value_now', 0):.2f}% implied by its "
+                   f"historical fiscal relationship ({fis.get('residual_now_bps', 0):+.0f} bp excess premium); debt held by public {d.get('debt_gdp', float('nan')):.0f}% "
                    f"of GDP, federal balance {d.get('deficit_gdp', float('nan')):+.1f}% of GDP.")
     fp = ctx.get("fiscal_premium") or {}
     if fp.get("fiscal_premium_bps"):
@@ -241,6 +273,41 @@ def _template_macro(ctx: dict) -> list[str]:
                                                                    for k, v in adds.items()) + ".")
     out += list(ctx.get("macro_themes", []))[:2]
     return out
+
+
+DRIVER_LABELS = {
+    "fed_policy": "Fed policy", "inflation_energy": "Inflation & energy", "fiscal_supply": "Fiscal & supply",
+    "fed_independence": "Fed independence", "geopolitics": "Geopolitics", "growth_labor": "Growth & labour",
+    "canada": "Canada / BoC", "global_rates": "Global rates", "other": "Other", "forecaster": "Forecaster view",
+}
+WATCH = {
+    "fed_policy": "FOMC statements, dot plot and the market-implied policy path",
+    "inflation_energy": "Core PCE / CPI prints, breakevens and oil prices",
+    "fiscal_supply": "Treasury refunding announcements, coupon auction demand and CBO deficit updates",
+    "fed_independence": "5y5y inflation expectations and communication around Fed leadership",
+    "geopolitics": "Energy supply risks and safe-haven flows",
+    "growth_labor": "Payrolls, unemployment and ISM surveys",
+    "canada": "BoC decisions, Canadian CPI and the policy differential with the Fed",
+}
+
+
+def _template_outlook(ctx: dict) -> dict:
+    research = ctx.get("macro_research") or {}
+    themes = research.get("themes") or [{"theme": t, "driver": "forecaster", "direction": "mixed"}
+                                        for t in ctx.get("macro_themes", [])]
+    impact = {"higher_yields": "higher", "lower_yields": "lower"}
+    pillars = [{"driver": t.get("driver", "other"),
+                "view": t["theme"] + (f" — {t['evidence']}" if t.get("evidence") else ""),
+                "yield_impact": impact.get(t.get("direction"), "neutral")} for t in themes[:6]]
+    fp = ctx.get("fiscal_premium") or {}
+    if fp.get("fiscal_premium_bps") and not any(p["driver"] == "fiscal_supply" for p in pillars):
+        pillars.append({"driver": "fiscal_supply", "yield_impact": "higher" if fp["fiscal_premium_bps"] > 0 else "lower",
+                        "view": f"Forecaster's fiscal-outlook revision adds {fp['fiscal_premium_bps']:+.0f} bp by the horizon."})
+    overview = research.get("quarter_summary") or " ".join(
+        (ctx.get("last_quarter_attribution") or {}).get("reading", [])[:2])
+    drivers = [p["driver"] for p in pillars] or ["fed_policy", "inflation_energy", "fiscal_supply"]
+    watch = [WATCH[d] for d in dict.fromkeys(drivers) if d in WATCH][:5] or list(WATCH.values())[:3]
+    return {"overview": overview, "pillars": pillars, "watch_list": watch}
 
 
 def draft_commentary(ctx: dict, use_ai: bool = True, api_key: str | None = None) -> dict:
@@ -328,6 +395,45 @@ def chart_decomposition(result) -> io.BytesIO:
     return _png(fig)
 
 
+def chart_macro(result) -> io.BytesIO | None:
+    """Macro page: term premium vs its historical fiscal relationship; long-run inflation expectations."""
+    from forecasting.term_premium import fit_tp_regression
+
+    h = result.history
+    try:
+        fit = fit_tp_regression(h)
+    except ValueError:
+        fit = None
+    infl_cols = [c for c in ("us_5y5y_bei", "us_10y_bei") if c in h and h[c].notna().any()]
+    if fit is None and not infl_cols:
+        return None
+    fig, axes = plt.subplots(1, 2, figsize=(7.4, 2.2))
+    ax = axes[0]
+    if fit is not None:
+        fitted = fit["fitted"]
+        fitted = fitted[fitted.index >= fitted.index[-1] - pd.DateOffset(years=12)]
+        actual = h["us_tp"].reindex(fitted.index)
+        ax.plot(actual.index, actual, color="#0b0b0b", lw=1.3, label="Term premium")
+        ax.plot(fitted.index, fitted, color=SERIES[1], lw=1.6, label="Historical fiscal relationship")
+        ax.fill_between(fitted.index, fitted, actual, where=actual > fitted, color=SERIES[1], alpha=0.15, lw=0)
+        ax.set_title(f"Term premium vs fiscal relationship (gap {fit['residual_now_bps']:+.0f} bp)",
+                     fontsize=8.5, loc="left", fontweight="bold")
+        ax.legend(fontsize=6, frameon=False, loc="upper left")
+    _style_ax(ax)
+    ax = axes[1]
+    labels = {"us_5y5y_bei": "5y5y forward inflation", "us_10y_bei": "10Y breakeven"}
+    for i, c in enumerate(infl_cols):
+        ser = h[c].dropna()
+        ser = ser[ser.index >= ser.index[-1] - pd.DateOffset(years=5)]
+        ax.plot(ser.index, ser, color=SERIES[[0, 2][i]], lw=1.4, label=labels[c])
+    ax.set_title("Inflation expectations (%)", fontsize=8.5, loc="left", fontweight="bold")
+    if infl_cols:
+        ax.legend(fontsize=6, frameon=False, loc="best")
+    _style_ax(ax)
+    fig.tight_layout()
+    return _png(fig)
+
+
 def _png(fig) -> io.BytesIO:
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=200, bbox_inches="tight")
@@ -337,9 +443,9 @@ def _png(fig) -> io.BytesIO:
 
 
 # --------------------------------------------------------------------------- PDF
-def _styles():
+def _styles(k: float = 1.0):
     ss = getSampleStyleSheet()
-    return {
+    st = {
         "title": ParagraphStyle("t", parent=ss["Title"], fontName="Helvetica-Bold", fontSize=16,
                                 leading=19, textColor=NAVY, alignment=TA_LEFT, spaceAfter=1),
         "sub": ParagraphStyle("s", parent=ss["Normal"], fontSize=8, textColor=MUTED, leading=10),
@@ -352,6 +458,11 @@ def _styles():
         "small": ParagraphStyle("sm", parent=ss["Normal"], fontSize=6.8, leading=8.4, textColor=MUTED),
         "cell": ParagraphStyle("c", parent=ss["Normal"], fontSize=7.4, leading=9, textColor=INK),
     }
+    if k != 1.0:
+        for name in ("body", "bullet", "small", "cell"):
+            st[name].fontSize *= k
+            st[name].leading *= k
+    return st
 
 
 def _bullets(items, st):
@@ -386,19 +497,27 @@ def _table(data, col_widths, header_rows=1, zebra=True, font=7.4):
 
 
 def build_pdf(result, commentary: dict, config: dict, ctx: dict | None = None) -> bytes:
-    """Render the brief; if long commentary spills past two pages, re-render in compact mode."""
+    """Render the brief; if long commentary spills past three pages, re-render in compact mode."""
     ctx = ctx or build_context(result, config)
-    pdf, pages = _render(result, commentary, config, ctx, compact=False)
-    if pages > 2:
-        logger.info("Brief ran to %d pages; re-rendering compact", pages)
-        pdf, pages = _render(result, commentary, config, ctx, compact=True)
+    pdf, pages = _render(result, commentary, config, ctx, compact=0)
+    for level in (1, 2):  # 1: smaller charts, ≤4 items; 2: also smaller type, ≤3 items
+        if pages <= MAX_PAGES:
+            break
+        logger.info("Brief ran to %d pages; re-rendering at compact level %d", pages, level)
+        pdf, pages = _render(result, commentary, config, ctx, compact=level)
     return pdf
 
 
-def _render(result, commentary: dict, config: dict, ctx: dict, compact: bool) -> tuple[bytes, int]:
-    if compact:  # trim lists, shrink charts
-        commentary = {k: (v[:3] if isinstance(v, list) else v) for k, v in commentary.items()}
-    st = _styles()
+def _render(result, commentary: dict, config: dict, ctx: dict, compact: int = 0) -> tuple[bytes, int]:
+    if compact:  # trim lists, shrink charts (and type at level 2)
+        n = 4 if compact == 1 else 3
+        commentary = {k: (v[:n] if isinstance(v, list) else v) for k, v in commentary.items()}
+        mo = commentary.get("macro_outlook")
+        mo = dict(mo) if isinstance(mo, dict) else {}
+        mo["pillars"] = (mo.get("pillars") or [])[:n + 1]
+        mo["watch_list"] = (mo.get("watch_list") or [])[:n]
+        commentary["macro_outlook"] = mo
+    st = _styles(0.92 if compact == 2 else 1.0)
     buf = io.BytesIO()
     W = letter[0] - 1.2 * inch
     doc = SimpleDocTemplate(buf, pagesize=letter, leftMargin=0.6 * inch, rightMargin=0.6 * inch,
@@ -455,10 +574,43 @@ def _render(result, commentary: dict, config: dict, ctx: dict, compact: bool) ->
             Paragraph(_esc(commentary.get("market_narrative", "")), st["body"]),
         ]))
 
-    # Page 2 — analysis
+    # Page 2 — macro
     story.append(PageBreak())
     story.append(Paragraph("Macro backdrop — fiscal, Fed, energy, geopolitics", st["h2"]))
     story.append(_bullets(commentary.get("macro_backdrop", []), st))
+    mimg = chart_macro(result)
+    if mimg is not None:
+        km = 0.8 if compact else 1.0
+        story.append(Spacer(1, 3))
+        story.append(Image(mimg, width=W * km, height=W * 2.2 / 7.4 * km))
+    mo = commentary.get("macro_outlook")
+    if isinstance(mo, dict) and mo:
+        story.append(Paragraph("Macro outlook — next two years", st["h2"]))
+        if mo.get("overview"):
+            story.append(Paragraph(_esc(mo["overview"]), st["body"]))
+            story.append(Spacer(1, 4))
+        arrow = {"higher": "↑ Higher", "lower": "↓ Lower", "neutral": "→ Neutral"}
+        prow = [[Paragraph("<b>Driver</b>", st["cell"]), Paragraph("<b>Outlook</b>", st["cell"]),
+                 Paragraph("<b>10Y impact</b>", st["cell"])]]
+        for p in mo.get("pillars") or []:
+            prow.append([Paragraph(_esc(DRIVER_LABELS.get(p.get("driver"), p.get("driver", ""))), st["cell"]),
+                         Paragraph(_esc(p.get("view", "")), st["cell"]),
+                         Paragraph(arrow.get(p.get("yield_impact"), "→ Neutral"), st["cell"])])
+        if len(prow) > 1:
+            pt = Table(prow, colWidths=[1.25 * inch, W - 2.15 * inch, 0.9 * inch], hAlign="LEFT", repeatRows=1)
+            style = [("VALIGN", (0, 0), (-1, -1), "TOP"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, NAVY),
+                     ("LINEBELOW", (0, -1), (-1, -1), 0.4, RULE),
+                     ("TOPPADDING", (0, 0), (-1, -1), 2.5), ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5)]
+            for r_ in range(2, len(prow), 2):
+                style.append(("BACKGROUND", (0, r_), (-1, r_), FILL))
+            pt.setStyle(TableStyle(style))
+            story.append(pt)
+        if mo.get("watch_list"):
+            story.append(Paragraph("What to watch", st["h2"]))
+            story.append(_bullets(mo["watch_list"], st))
+
+    # Page 3 — rates analysis
+    story.append(PageBreak())
     story.append(Paragraph("US 10Y — drivers", st["h2"]))
     story.append(_bullets(commentary["us_analysis"], st))
     k = 0.78 if compact else 1.0
