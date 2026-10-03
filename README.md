@@ -14,7 +14,17 @@ python forecast.py --backtest      # forecast + out-of-sample backtest → outpu
 python main.py                     # full Word reports (needs ANTHROPIC_API_KEY for commentary)
 python forecast.py --synthetic --backtest   # offline demo with FAKE data
 pytest tests/
+streamlit run app.py               # interactive web page: adjust views, see results live
 ```
+
+### Interactive forecast lab (`app.py`)
+
+`streamlit run app.py` opens a local web page (http://localhost:8501). Edit scenario
+probabilities and Fed / BoC paths in tables, move sliders for the neutral rate, term premium,
+Canada spread and overlays — the forecast, fan charts, decomposition and quarterly table update
+instantly. The **Backtest** tab runs the out-of-sample test; **Export config** gives the YAML to
+paste into `config/quarterly_config.yaml` so `forecast.py` / `main.py` use the same settings.
+It reads the dataset cached by `python forecast.py` (run that first; or toggle synthetic demo data).
 
 ## 2-year forecast model (`src/forecasting/`)
 
