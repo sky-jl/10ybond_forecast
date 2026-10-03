@@ -124,6 +124,7 @@ def run_backtest(df: pd.DataFrame, config: dict, start: str | None = None,
     last = df.index[-1]
 
     records = []
+    failures: list[tuple[pd.Timestamp, str]] = []
     for t in origins:
         v = _vintage(df, t)
         if len(v) < 120:
@@ -138,8 +139,11 @@ def run_backtest(df: pd.DataFrame, config: dict, start: str | None = None,
             m = next(iter(sc.values()))
             preds[("us_10y", "model")] = m["us_10y"].to_numpy()[1:]
             preds[("canada_10y", "model")] = m["canada_10y"].to_numpy()[1:]
+            # Variant: US model + today's Canada–US spread held flat
+            preds[("canada_10y", "model_flat_spread")] = (
+                m["us_10y"].to_numpy()[1:] + float(v["spread_can_us"].iloc[-1]))
         except Exception as exc:
-            logger.debug("model failed at %s: %s", t.date(), exc)
+            failures.append((t, repr(exc)))
         row = v.iloc[-1]
         for tgt in ("us_10y", "canada_10y"):
             preds[(tgt, "rw")] = np.full(H, row[tgt])
@@ -164,6 +168,10 @@ def run_backtest(df: pd.DataFrame, config: dict, start: str | None = None,
                     continue
                 records.append((t, tgt, name, k + 1, p[k], actual[k], float(row[tgt])))
 
+    if failures:
+        logger.warning("Structural model failed at %d of %d origins (%s → %s); first error: %s",
+                       len(failures), len(origins), failures[0][0].date(), failures[-1][0].date(),
+                       failures[0][1])
     errors = pd.DataFrame(records, columns=["origin", "target", "model", "h", "pred", "actual", "origin_value"])
     errors["error"] = errors["pred"] - errors["actual"]
     return {"errors": errors, "summary": summarize(errors)}

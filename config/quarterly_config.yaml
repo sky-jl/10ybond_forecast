@@ -89,6 +89,9 @@ long_term_risks:
 forecast:
   enabled: true
   horizon_months: 24
+  # Optional local copy of NY Fed ACMTermPremium.xls (if the automatic download is blocked).
+  # null → try download, fall back to Kim-Wright (THREEFYTP10).
+  acm_file: null
 
   # ---- 1. Policy-rate scenarios (最重要的主观输入) --------------------------
   # fed_funds / boc_rate: expected policy rate (%) at the END of each period.

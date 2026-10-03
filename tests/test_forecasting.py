@@ -84,3 +84,22 @@ def test_backtest_summary(monthly, config):
     assert np.allclose(rw["rmse_vs_rw"], 1.0)
     e = bt["errors"]
     assert e.groupby(["origin", "target", "model"])["h"].max().max() <= 24
+
+
+def test_trailing_partial_month_is_trimmed(monthly):
+    from data_fetcher import finalize_monthly_dataset
+    raw = monthly.copy()
+    nxt = raw.index[-1] + pd.offsets.MonthEnd(1)
+    raw.loc[nxt] = raw.iloc[-1]
+    raw.loc[nxt, ["canada_10y", "canada_2y"]] = np.nan   # BoC not yet published
+    out = finalize_monthly_dataset(raw.drop(columns=["spread_can_us", "policy_diff"]))
+    assert out.index[-1] == monthly.index[-1]
+
+
+def test_short_boc_history_does_not_break_us_backtest(monthly, config):
+    df = monthly.copy()
+    df.loc[:"2009-03-31", ["boc_rate", "policy_diff", "spread_can_us"]] = np.nan
+    bt = run_backtest(df.loc[:"2014-12-31"], config, start="2006-01-31", step=3)
+    e = bt["errors"]
+    us_model = e[(e["target"] == "us_10y") & (e["model"] == "model")]
+    assert us_model["origin"].min() == pd.Timestamp("2006-01-31")

@@ -17,6 +17,8 @@ from .utils import ols, phi_from_halflife
 
 def fit_spread_model(df: pd.DataFrame, sample_start: str = "2000-01-01") -> dict:
     d = df.loc[sample_start:, ["spread_can_us", "policy_diff"]].dropna()
+    if len(d) < 36:
+        raise ValueError(f"only {len(d)} months of Canada spread / policy data")
     s = d["spread_can_us"].to_numpy()
     pdiff = d["policy_diff"].to_numpy()
     X = np.column_stack([np.ones(len(s) - 1), s[:-1], pdiff[1:]])

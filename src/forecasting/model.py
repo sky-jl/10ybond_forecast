@@ -101,7 +101,11 @@ def project_scenarios(df: pd.DataFrame, config: dict, fcfg: dict | None = None) 
     tp_base, tp_info = term_premium.tp_path(df, H, tp_cfg)
 
     sp_cfg = fcfg.get("canada_spread", {})
-    sp_params = canada.fit_spread_model(df, sp_cfg.get("sample_start", "2000-01-01"))
+    try:
+        sp_params = canada.fit_spread_model(df, sp_cfg.get("sample_start", "2000-01-01"))
+    except (ValueError, IndexError, np.linalg.LinAlgError) as exc:
+        logger.debug("Canada spread model unavailable: %s", exc)
+        sp_params = None
 
     ov = fcfg.get("overlay", {}) or {}
     us_ov = overlay_path(ov.get("us_10y_bps"), idx)
@@ -151,7 +155,8 @@ def project_scenarios(df: pd.DataFrame, config: dict, fcfg: dict | None = None) 
             basis = basis + (float(last["us_10y"]) - us[0]) * expectations.decay(h, basis_hl)
             us = exp + basis + tp + us_ov
         pdiff = p["boc"] - p["fed"]
-        spread = canada.spread_path(df, pdiff, sp_params, sp_cfg)
+        spread = (canada.spread_path(df, pdiff, sp_params, sp_cfg) if sp_params
+                  else np.full(H + 1, np.nan))
         ca = us + spread + ca_ov
         out[name] = pd.DataFrame({
             "fed_funds": p["fed"], "boc_rate": p["boc"], "policy_diff": pdiff,
@@ -163,7 +168,7 @@ def project_scenarios(df: pd.DataFrame, config: dict, fcfg: dict | None = None) 
         "neutral_fed_funds": round(fed_n, 3), "neutral_boc_rate": round(boc_n, 3),
         "convergence_halflife_months": conv_hl, "basis_halflife_months": basis_hl,
         "taylor_rule": taylor_used, "term_premium": tp_info,
-        "canada_spread": {k: round(v, 4) for k, v in sp_params.items()},
+        "canada_spread": {k: round(v, 4) for k, v in (sp_params or {}).items()},
     }
     return out, probs, params, idx
 

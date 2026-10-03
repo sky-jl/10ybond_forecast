@@ -49,6 +49,11 @@ def main() -> None:
 
     out = Path(args.output_dir)
     df = load_dataset(config, args.data_file, args.synthetic, cache_path=out / "monthly_dataset.csv")
+    from data_fetcher import coverage_report
+    pd.set_option("display.width", 160)
+    print("\nData coverage (monthly):")
+    print(coverage_report(df).to_string())
+    print(f"Forecast origin (h = 0): {df.index[-1]:%Y-%m}\n")
     result = run_pipeline(df, config, out, backtest=args.backtest)
     charts = generate_forecast_charts(result, out / "charts")
 

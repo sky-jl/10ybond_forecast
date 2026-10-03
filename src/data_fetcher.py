@@ -144,7 +144,8 @@ MONTHLY_FRED_MACRO = {
 MONTHLY_BOC_MARKET = {
     "canada_10y": "BD.CDN.10YR.DQ.YLD",
     "canada_2y": "BD.CDN.2YR.DQ.YLD",
-    "boc_rate": "B114039",
+    "boc_rate": "B114039",       # target overnight rate (VALET history starts ~2009)
+    "boc_rate_hist": "V39079",   # target overnight rate, longer history (back-fills boc_rate)
 }
 
 # Series the forecast model cannot run without
@@ -156,13 +157,29 @@ ACM_URL = (
 )
 
 
-def fetch_acm(start: str) -> pd.DataFrame:
+def fetch_acm(start: str, local_file: str | None = None) -> pd.DataFrame:
     """
-    Download the NY Fed ACM term structure decomposition (daily).
+    NY Fed ACM term structure decomposition (daily), from `local_file` if given, else downloaded.
     Returns columns acm_tp (ACMTP10) and acm_rny (ACMRNY10, risk-neutral 10Y yield).
-    Requires the `xlrd` package to read the .xls file.
     """
-    raw = pd.read_excel(ACM_URL, sheet_name=0)
+    import io
+
+    if local_file:
+        content = open(local_file, "rb").read()
+    else:
+        resp = requests.get(ACM_URL, timeout=60, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        content = resp.content
+    if content[:4] == b"\xd0\xcf\x11\xe0":
+        engine = "xlrd"        # legacy .xls
+    elif content[:2] == b"PK":
+        engine = "openpyxl"    # .xlsx
+    else:
+        raise ValueError(
+            "NY Fed returned a web page instead of the Excel file. Download "
+            "ACMTermPremium.xls manually from newyorkfed.org (ACM term premia page) and set "
+            "forecast.acm_file in the config; Kim-Wright is used meanwhile")
+    raw = pd.read_excel(io.BytesIO(content), sheet_name=0, engine=engine)
     raw["DATE"] = pd.to_datetime(raw["DATE"], format="mixed", dayfirst=True)
     raw = raw.set_index("DATE").sort_index()
     out = raw[["ACMTP10", "ACMRNY10"]].rename(
@@ -207,7 +224,8 @@ def build_monthly_dataset(config: dict, start: str = "1990-01-01") -> pd.DataFra
         if s is not None:
             macro[name] = s
 
-    acm = _try(lambda: fetch_acm(start), "acm", False)
+    acm_file = (config.get("forecast") or {}).get("acm_file")
+    acm = _try(lambda: fetch_acm(start, acm_file), "acm", False)
     if acm is not None:
         for col in acm.columns:
             market[col] = acm[col]
@@ -215,7 +233,8 @@ def build_monthly_dataset(config: dict, start: str = "1990-01-01") -> pd.DataFra
     daily = pd.DataFrame(market)
     monthly = daily.resample("ME").mean()
     # Realized volatility of daily 10Y changes within the month (bps)
-    monthly["us_10y_rvol"] = daily["us_10y"].diff().resample("ME").std() * 100
+    d10 = daily["us_10y"].diff()
+    monthly["us_10y_rvol"] = (d10.resample("ME").std() * 100).where(d10.resample("ME").count() >= 5)
 
     if macro:
         monthly = monthly.join(pd.DataFrame(macro).resample("ME").last(), how="left")
@@ -226,7 +245,19 @@ def build_monthly_dataset(config: dict, start: str = "1990-01-01") -> pd.DataFra
 def finalize_monthly_dataset(df: pd.DataFrame) -> pd.DataFrame:
     """Add derived columns and trim. Shared by the live fetcher, CSV cache and synthetic data."""
     df = df.copy().sort_index()
+    if "boc_rate_hist" in df:
+        df["boc_rate"] = df["boc_rate"].combine_first(df["boc_rate_hist"]) if "boc_rate" in df \
+            else df["boc_rate_hist"]
+        df = df.drop(columns="boc_rate_hist")
+    if "boc_rate" in df:
+        df["boc_rate"] = df["boc_rate"].ffill()  # policy rate only changes on decision dates
     df = df.dropna(subset=["us_10y", "fed_funds"], how="any")
+    # Drop trailing months where a required series has not been published yet (e.g. the
+    # current partial month before Bank of Canada data arrives), so all series share h = 0.
+    req = [c for c in REQUIRED_MONTHLY if c in df]
+    complete = df[req].notna().all(axis=1)
+    if complete.any():
+        df = df.loc[:complete[complete].index[-1]]
     # Slow-moving macro series are published with a lag / at lower frequency
     for col in ("nrou", "deficit_gdp", "core_pce", "unrate"):
         if col in df:
@@ -256,3 +287,13 @@ def save_monthly_dataset(df: pd.DataFrame, path) -> None:
 def load_monthly_dataset(path) -> pd.DataFrame:
     df = pd.read_csv(path, index_col="date", parse_dates=True)
     return finalize_monthly_dataset(df)
+
+
+def coverage_report(df: pd.DataFrame) -> pd.DataFrame:
+    """First / last valid month for each column — quick data sanity check."""
+    rows = {c: (df[c].first_valid_index(), df[c].last_valid_index(), int(df[c].notna().sum()))
+            for c in df.columns}
+    out = pd.DataFrame(rows, index=["first", "last", "n_obs"]).T
+    out["first"] = pd.to_datetime(out["first"]).dt.strftime("%Y-%m")
+    out["last"] = pd.to_datetime(out["last"]).dt.strftime("%Y-%m")
+    return out
