@@ -67,3 +67,19 @@ def test_context_has_macro_attribution(result, config):
     att = ctx["last_quarter_attribution"]
     assert {"Expectations vs term premium", "Real vs inflation", "Front end vs curve"} <= set(att["splits"])
     assert ctx["term_premium_fiscal"]["drivers"]
+
+
+def test_pdf_reflects_macro_drivers(monthly, config):
+    import copy
+    cfg = copy.deepcopy(config)
+    cfg["forecast"]["term_premium"]["fiscal"] = {"deficit_revision_pp": 1.0}
+    cfg["forecast"]["term_premium"]["addons_bps"] = {"fed_independence": 15}
+    cfg["macro_themes"] = ["TEST-THEME weak auctions"]
+    cfg["macro_theme_sources"] = [{"url": "https://www.example.com/auction", "title": "Auction recap"}]
+    r = run_forecast(monthly, cfg)
+    pdf, _ = generate_brief(r, cfg, use_ai=False)
+    txt = " ".join(p.extract_text() for p in pypdf.PdfReader(io.BytesIO(pdf)).pages)
+    for needle in ("What moved yields", "Macro backdrop", "Fiscal prem", "fed independence",
+                   "TEST-THEME", "www.example.com"):
+        assert needle.lower() in txt.lower(), needle
+    assert len(pypdf.PdfReader(io.BytesIO(pdf)).pages) <= 2

@@ -628,6 +628,7 @@ with tabs[8]:
         rc2.caption("Add ANTHROPIC_API_KEY to `.env` to enable research. You can still type themes below.")
 
     final_themes: list[str] = []
+    theme_sources: dict[str, dict] = {}
     r = st.session_state.get("research")
     if r:
         rc2.caption(f"Research for **{r.get('period')}** · generated {r.get('generated')} · {r.get('model')} · "
@@ -647,6 +648,8 @@ with tabs[8]:
                 cc2.markdown(" · ".join(f"[{s_['title'][:70]}]({s_['url']})" for s_ in t.get("sources", [])))
                 if inc and txt.strip():
                     final_themes.append(txt.strip())
+                    for s_ in t.get("sources", []):
+                        theme_sources.setdefault(s_["url"], {"url": s_["url"], "title": s_.get("title", "")})
         with st.expander("All sources and research notes"):
             for s_ in r.get("sources", []):
                 st.markdown(f"[{s_['id']}] [{s_['title']}]({s_['url']})")
@@ -656,6 +659,7 @@ with tabs[8]:
                           key="manual_themes")
     final_themes += [ln.strip() for ln in manual.splitlines() if ln.strip()]
     cfg["macro_themes"] = final_themes
+    cfg["macro_theme_sources"] = list(theme_sources.values())
     st.caption(f"**{len(final_themes)} theme(s)** will be used in the reports.")
 
 with tabs[6]:

@@ -230,6 +230,11 @@ def _template_macro(ctx: dict) -> list[str]:
         out.append(f"Term premium {fis.get('tp_now', 0):.2f}% vs fiscal fair value {fis.get('fair_value_now', 0):.2f}% "
                    f"({fis.get('residual_now_bps', 0):+.0f} bps); debt held by public {d.get('debt_gdp', float('nan')):.0f}% "
                    f"of GDP, federal balance {d.get('deficit_gdp', float('nan')):+.1f}% of GDP.")
+    fp = ctx.get("fiscal_premium") or {}
+    if fp.get("fiscal_premium_bps"):
+        out.append(f"Fiscal-outlook revision (deficit {fp.get('deficit_revision_pp') or 0:+.1f} pp, debt "
+                   f"{fp.get('debt_revision_pp') or 0:+.1f} pp vs baseline) adds a {fp['fiscal_premium_bps']:+.0f} bp "
+                   "fiscal premium by the horizon.")
     adds = ctx.get("term_premium_addons_bps") or {}
     if adds:
         out.append("Forecaster risk-premium add-ons: " + ", ".join(f"{k.replace('_', ' ')} {v:+.0f} bps"
@@ -462,12 +467,17 @@ def _render(result, commentary: dict, config: dict, ctx: dict, compact: bool) ->
     story.append(_bullets(commentary["canada_analysis"], st))
 
     # Scenarios
-    srows = [["Scenario", "Weight", "Fed end", "BoC end", "US 10Y end", "Canada 10Y end"]]
+    fis = ctx.get("fiscal_premium_by_scenario_bps") or {}
+    show_fis = any(abs(v) > 0.05 for v in fis.values())
+    srows = [["Scenario", "Weight", "Fed end", "BoC end"] + (["Fiscal prem."] if show_fis else [])
+             + ["US 10Y end", "Canada 10Y end"]]
     for n, s in ctx["scenarios"].items():
-        srows.append([n, f"{s['probability']:.0%}", f"{s['fed_funds_end']:.2f}%", f"{s['boc_rate_end']:.2f}%",
-                      f"{s['us_10y_end']:.2f}%", f"{s['canada_10y_end']:.2f}%"])
+        srows.append([n, f"{s['probability']:.0%}", f"{s['fed_funds_end']:.2f}%", f"{s['boc_rate_end']:.2f}%"]
+                     + ([f"{fis.get(n, 0):+.0f} bp"] if show_fis else [])
+                     + [f"{s['us_10y_end']:.2f}%", f"{s['canada_10y_end']:.2f}%"])
+    ncol = len(srows[0]) - 1
     story.append(KeepTogether([Paragraph("Scenarios", st["h2"]),
-                               _table(srows, [1.6 * inch] + [(W - 1.6 * inch) / 5] * 5)]))
+                               _table(srows, [1.6 * inch] + [(W - 1.6 * inch) / ncol] * ncol)]))
 
     # Risks side by side
     up = [Paragraph("<b>↑ Upside (higher yields)</b>", st["cell"])] + \
@@ -496,6 +506,14 @@ def _render(result, commentary: dict, config: dict, ctx: dict, compact: bool) ->
         f"block bootstrap of historical monthly changes around the probability-weighted scenarios.{bt_txt} "
         f"Data: FRED, Bank of Canada, NY Fed ACM. {_esc(commentary.get('_source', ''))}. "
         f"Draft for review — not investment advice.", st["small"]))
+    srcs = config.get("macro_theme_sources") or []
+    if srcs:
+        from urllib.parse import urlparse
+        items = "; ".join(f"[{i}] {_esc(s_.get('title') or '')[:70]} ({urlparse(s_['url']).netloc})"
+                          for i, s_ in enumerate(srcs[:12], 1))
+        story.append(Spacer(1, 3))
+        story.append(Paragraph(f"Macro theme sources (web research, reviewed by the forecaster): {items}",
+                               st["small"]))
 
     def _footer(canvas, doc_):
         canvas.saveState()
