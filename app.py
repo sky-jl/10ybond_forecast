@@ -85,6 +85,12 @@ def anchors_to_frame(scenarios: list[dict], key: str) -> pd.DataFrame:
     return pd.DataFrame(data, index=pd.Index(periods, name="period"))
 
 
+def rate_columns(frame: pd.DataFrame) -> dict:
+    """Decimal number columns (3 dp) so rate paths like 3.375 can be typed in any Streamlit version."""
+    return {c: st.column_config.NumberColumn(c, min_value=-1.0, max_value=20.0, step=0.001, format="%.3f")
+            for c in frame.columns}
+
+
 def frame_to_anchors(frame: pd.DataFrame, name: str) -> dict:
     col = frame[name] if name in frame else pd.Series(dtype=float)
     return {str(p).strip(): float(v) for p, v in col.items()
@@ -141,11 +147,13 @@ last_obs = df.index[-1]
 horizon_end = (last_obs + pd.offsets.MonthEnd(H)).strftime("%Y-%m")
 
 with sb.expander("Neutral rates & expectations", expanded=True):
-    neutral_fed = st.slider("Fed neutral rate (%)", 1.5, 5.5,
+    neutral_fed = st.number_input("Fed neutral rate (%)", 0.0, 10.0,
                             float(fbase.get("neutral_fed_funds") or base_cfg.get("long_run_fed_funds", 3.0)), 0.125,
+                            format="%.3f",
                             help="Long-run nominal Fed funds rate the short rate converges to beyond the horizon")
-    neutral_boc = st.slider("BoC neutral rate (%)", 1.0, 5.0,
-                            float(fbase.get("neutral_boc_rate") or base_cfg.get("long_run_boc_rate", 2.75)), 0.125)
+    neutral_boc = st.number_input("BoC neutral rate (%)", 0.0, 10.0,
+                            float(fbase.get("neutral_boc_rate") or base_cfg.get("long_run_boc_rate", 2.75)), 0.125,
+                            format="%.3f")
     exp_cfg = fbase.get("expectations", {})
     conv_hl = st.slider("Convergence half-life beyond horizon (months)", 6, 120,
                         int(exp_cfg.get("convergence_halflife_months", 36)), 6)
@@ -165,9 +173,9 @@ with sb.expander("Term premium", expanded=True):
     tp_mode = st.radio("Target", modes, index=mode_idx, horizontal=False)
     tp_now = float(df["us_tp"].dropna().iloc[-1]) if "us_tp" in df else np.nan
     st.caption(f"Current term premium: **{tp_now:.2f}%**")
-    tp_value = st.slider("Term premium target (%)", -1.0, 2.5,
+    tp_value = st.number_input("Term premium target (%)", -3.0, 5.0,
                          float(tp_default) if isinstance(tp_default, (int, float)) else round(tp_now, 2), 0.05,
-                         disabled=tp_mode != modes[0])
+                         format="%.2f", disabled=tp_mode != modes[0])
     tp_window = st.slider("Historical window (years)", 5, 35, int(tp_cfg.get("historical_window_years", 30)),
                           disabled=tp_mode != modes[1])
     if tp_mode == modes[1] and "us_tp" in df:
@@ -183,9 +191,9 @@ with sb.expander("Canada–US spread"):
     sp_fixed = st.toggle("Use your spread view instead of the model",
                          value=isinstance(sp_cfg.get("target"), (int, float)),
                          help="Model: spread follows the BoC − Fed policy differential of each scenario")
-    sp_value = st.slider("Spread target (pp)", -2.5, 1.5,
+    sp_value = st.number_input("Spread target (pp)", -5.0, 5.0,
                          float(sp_cfg["target"]) if isinstance(sp_cfg.get("target"), (int, float)) else round(sp_now, 2),
-                         0.05, disabled=not sp_fixed)
+                         0.05, format="%.2f", disabled=not sp_fixed)
     st.caption(f"Current Canada–US spread: **{sp_now:+.2f} pp**")
     boc_pass = st.slider("Fed→BoC pass-through (when BoC path not set)", 0.0, 1.0,
                          float(fbase.get("boc_fed_passthrough", 0.5)), 0.05)
@@ -216,12 +224,12 @@ with c1:
     st.markdown("**Scenario weights & term-premium views**")
     meta = pd.DataFrame({
         "probability": [float(s.get("probability", 0)) for s in scen_cfg],
-        "TP target (%)": [s.get("term_premium_target", np.nan) for s in scen_cfg],
+        "TP target (%)": [float(s.get("term_premium_target", np.nan)) for s in scen_cfg],
     }, index=pd.Index([s["name"] for s in scen_cfg], name="scenario"))
     meta = st.data_editor(
         meta, key="meta", use_container_width=True,
         column_config={
-            "probability": st.column_config.NumberColumn(min_value=0.0, max_value=1.0, step=0.05, format="%.2f"),
+            "probability": st.column_config.NumberColumn(min_value=0.0, max_value=1.0, step=0.01, format="%.2f"),
             "TP target (%)": st.column_config.NumberColumn(
                 help="Optional scenario-specific term premium; blank = global setting", format="%.2f"),
         })
@@ -234,13 +242,15 @@ with c1b:
 c2, c3 = st.columns(2)
 with c2:
     st.markdown("**Fed funds path (% at period end)**")
-    fed_tbl = st.data_editor(anchors_to_frame(scen_cfg, "fed_funds"), key="fed", num_rows="dynamic",
-                             use_container_width=True)
+    fed_in = anchors_to_frame(scen_cfg, "fed_funds").astype(float)
+    fed_tbl = st.data_editor(fed_in, key="fed", num_rows="dynamic", use_container_width=True,
+                             column_config=rate_columns(fed_in))
     st.caption(f"Latest: **{df['fed_funds'].iloc[-1]:.2f}%** · periods like 2027Q2 or 2027-06")
 with c3:
     st.markdown("**BoC overnight path (% at period end)**")
-    boc_tbl = st.data_editor(anchors_to_frame(scen_cfg, "boc_rate"), key="boc", num_rows="dynamic",
-                             use_container_width=True)
+    boc_in = anchors_to_frame(scen_cfg, "boc_rate").astype(float)
+    boc_tbl = st.data_editor(boc_in, key="boc", num_rows="dynamic", use_container_width=True,
+                             column_config=rate_columns(boc_in))
     st.caption(f"Latest: **{df['boc_rate'].iloc[-1]:.2f}%** · blank column = model BoC path")
 
 # ------------------------------------------------------------------------------ assemble config

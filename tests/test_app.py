@@ -19,7 +19,7 @@ def test_app_runs_and_reacts_to_inputs():
     at = _run(st_testing.AppTest.from_file(APP))
     assert len(at.metric) == 4
     before = at.metric[1].value
-    neutral = next(s for s in at.sidebar.slider if s.label.startswith("Fed neutral"))
+    neutral = next(s for s in at.sidebar.number_input if s.label.startswith("Fed neutral"))
     neutral.set_value(neutral.value + 1.0)
     _run(at)
     assert at.metric[1].value != before   # higher neutral → different US 10Y path
