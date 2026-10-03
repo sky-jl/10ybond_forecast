@@ -64,6 +64,12 @@ Canada 10Y = US 10Y  +  Canada–US spread  +  overlay
   Fed independence, geopolitics, energy-inflation risk, fiscal supply — in bps, shown by name in the
   report.
 
+- **Macro themes — AI research, you approve** (`macro_research.py`, bottom of the *Macro drivers*
+  tab): Claude (`claude-opus-5-5` + web search) researches the last quarter. Every theme must cite
+  pages it actually retrieved — themes without a valid source are dropped in code. You edit, untick
+  or add themes; the approved list feeds the PDF/Word commentary and the *Export config* YAML
+  (`macro_themes:`). Each run is saved to `output/forecast/macro_research_<date>.json`.
+
 Why expectations + term premium (not real + breakeven) as the main split: over 2 years most 10Y
 variation comes from the expected policy path, which has explicit, forecastable drivers. TIPS real
 yields and breakevens each contain their own risk/liquidity premia and are not easier to forecast;

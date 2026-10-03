@@ -465,45 +465,6 @@ with tabs[5]:
         st.dataframe(sub.drop(columns="target").style.format(
             {"rmse": "{:.3f}", "mae": "{:.3f}", "bias": "{:+.3f}", "rmse_vs_rw": "{:.3f}",
              "hit_rate": "{:.2f}", "dm_pvalue_vs_rw": "{:.2f}"}), width="stretch", hide_index=True)
-with tabs[6]:
-    import os
-
-    from brief_report import MODEL, generate_brief
-
-    st.markdown("A concise **1–2 page PDF brief** of the current settings: headline call, KPI table, "
-                "fan charts, quarterly table, US decomposition, policy scenarios, Canada view, risks "
-                "and conclusion.")
-    has_key = bool(os.environ.get("ANTHROPIC_API_KEY") or base_cfg.get("anthropic_api_key"))
-    use_ai = st.toggle(f"Draft the commentary with Claude (`{MODEL}`)", value=has_key, disabled=not has_key,
-                       help="Needs ANTHROPIC_API_KEY in .env. Off = factual template text from the numbers.")
-    if not has_key:
-        st.caption("No ANTHROPIC_API_KEY found in `.env` — the PDF will use template commentary.")
-    include_bt = "bt" in st.session_state
-    st.caption("Backtest results will be included." if include_bt
-               else "Tip: run the Backtest tab first to include its accuracy summary.")
-    if st.button("Generate PDF report", type="primary"):
-        with st.spinner("Drafting commentary and building the PDF…" if use_ai else "Building the PDF…"):
-            pdf, commentary = generate_brief(res, cfg, st.session_state.get("bt"), use_ai=use_ai)
-        st.session_state["pdf"] = pdf
-        st.session_state["pdf_commentary"] = commentary
-    if "pdf" in st.session_state:
-        slug = str(cfg.get("quarter", "")).replace(" ", "_")
-        st.download_button("⬇ Download PDF", st.session_state["pdf"], f"10Y_Outlook_{slug}.pdf",
-                           "application/pdf")
-        com = st.session_state["pdf_commentary"]
-        st.caption(com.get("_source", ""))
-        with st.expander("Preview commentary", expanded=True):
-            st.markdown(f"**{com['headline']}**\n\n{com['summary']}")
-            st.markdown("**Conclusion:** " + com["conclusion"])
-with tabs[7]:
-    st.markdown("Copy this into the `forecast:` section of `config/quarterly_config.yaml` to make these "
-                "settings the defaults for `forecast.py` and the Word report.")
-    out = {k: v for k, v in f.items() if k not in ("enabled",)}
-    text = yaml.safe_dump({"forecast": {"enabled": fbase.get("enabled", True), **out}},
-                          sort_keys=False, allow_unicode=True)
-    st.code(text, language="yaml")
-    st.download_button("Download forecast settings (YAML)", text.encode(), "forecast_settings.yaml", "text/yaml")
-
 with tabs[8]:
     st.markdown("### What moved yields — what was the market trading?")
     win_opts = {"Last completed quarter": None, "Last 1 month": 1, "Last 3 months": 3,
@@ -570,3 +531,100 @@ with tabs[8]:
                    "which is why the Fed balance sheet is included as a control. Use it to frame the fiscal "
                    "channel; set your horizon driver values in the sidebar (Fiscal fair value mode) and "
                    "add named risk premia for Fed independence, geopolitics or energy.")
+
+    # ---------------------------------------------------------------- macro themes (AI research + edit)
+    st.markdown("### Macro themes for the report")
+    st.caption("Claude researches the period with web search — every theme must cite a page it actually "
+               "retrieved, unsourced themes are dropped. Review, edit or untick themes, and add your own; "
+               "the final list feeds the PDF / Word commentary.")
+    import os as _os
+
+    from macro_research import MODEL as R_MODEL, load_latest_research, research_macro_themes, save_research
+
+    research_dir = ROOT / "output" / "forecast"
+    if "research" not in st.session_state:
+        st.session_state["research"] = load_latest_research(research_dir)
+    key_ok = bool(_os.environ.get("ANTHROPIC_API_KEY") or base_cfg.get("anthropic_api_key"))
+    att_q = attribute(df)
+    rc1, rc2 = st.columns([1, 2])
+    if rc1.button(f"🔎 Research {att_q['start']} – {att_q['end']} with Claude", disabled=not key_ok,
+                  help=f"{R_MODEL} + web search; takes 1–3 minutes and uses API credits"):
+        with st.spinner("Searching the news and drafting cited themes (1–3 min)…"):
+            try:
+                r = research_macro_themes(att_q, cfg)
+                save_research(r, research_dir)
+                st.session_state["research"] = r
+                for k in [k for k in st.session_state if str(k).startswith(("th_", "inc_"))]:
+                    del st.session_state[k]
+            except Exception as exc:
+                st.error(f"Research failed: {exc}")
+    if not key_ok:
+        rc2.caption("Add ANTHROPIC_API_KEY to `.env` to enable research. You can still type themes below.")
+
+    final_themes: list[str] = []
+    r = st.session_state.get("research")
+    if r:
+        rc2.caption(f"Research for **{r.get('period')}** · generated {r.get('generated')} · {r.get('model')} · "
+                    f"{len(r.get('sources', []))} sources · {r.get('dropped_unsourced', 0)} unsourced theme(s) dropped")
+        st.info(r.get("quarter_summary", ""))
+        for i, t in enumerate(r.get("themes", [])):
+            with st.container(border=True):
+                cc1, cc2 = st.columns([0.07, 0.93])
+                inc = cc1.checkbox("Use", value=True, key=f"inc_{i}", label_visibility="collapsed")
+                txt = cc2.text_area(f"{t['driver'].replace('_', ' ')} · {t['direction'].replace('_', ' ')}",
+                                    t["theme"], key=f"th_{i}", height=68)
+                cc2.caption("Evidence: " + t.get("evidence", ""))
+                cc2.markdown(" · ".join(f"[{s_['title'][:70]}]({s_['url']})" for s_ in t.get("sources", [])))
+                if inc and txt.strip():
+                    final_themes.append(txt.strip())
+        with st.expander("All sources and research notes"):
+            for s_ in r.get("sources", []):
+                st.markdown(f"[{s_['id']}] [{s_['title']}]({s_['url']})")
+            st.text(r.get("notes", ""))
+    manual = st.text_area("Your own themes (one per line)",
+                          "\n".join(base_cfg.get("macro_themes", []) if not r else []), height=120,
+                          key="manual_themes")
+    final_themes += [ln.strip() for ln in manual.splitlines() if ln.strip()]
+    cfg["macro_themes"] = final_themes
+    st.caption(f"**{len(final_themes)} theme(s)** will be used in the reports.")
+
+with tabs[6]:
+    import os
+
+    from brief_report import MODEL, generate_brief
+
+    st.markdown("A concise **1–2 page PDF brief** of the current settings: headline call, KPI table, "
+                "fan charts, quarterly table, US decomposition, policy scenarios, Canada view, risks "
+                "and conclusion.")
+    has_key = bool(os.environ.get("ANTHROPIC_API_KEY") or base_cfg.get("anthropic_api_key"))
+    use_ai = st.toggle(f"Draft the commentary with Claude (`{MODEL}`)", value=has_key, disabled=not has_key,
+                       help="Needs ANTHROPIC_API_KEY in .env. Off = factual template text from the numbers.")
+    if not has_key:
+        st.caption("No ANTHROPIC_API_KEY found in `.env` — the PDF will use template commentary.")
+    include_bt = "bt" in st.session_state
+    st.caption("Backtest results will be included." if include_bt
+               else "Tip: run the Backtest tab first to include its accuracy summary.")
+    if st.button("Generate PDF report", type="primary"):
+        with st.spinner("Drafting commentary and building the PDF…" if use_ai else "Building the PDF…"):
+            pdf, commentary = generate_brief(res, cfg, st.session_state.get("bt"), use_ai=use_ai)
+        st.session_state["pdf"] = pdf
+        st.session_state["pdf_commentary"] = commentary
+    if "pdf" in st.session_state:
+        slug = str(cfg.get("quarter", "")).replace(" ", "_")
+        st.download_button("⬇ Download PDF", st.session_state["pdf"], f"10Y_Outlook_{slug}.pdf",
+                           "application/pdf")
+        com = st.session_state["pdf_commentary"]
+        st.caption(com.get("_source", ""))
+        with st.expander("Preview commentary", expanded=True):
+            st.markdown(f"**{com['headline']}**\n\n{com['summary']}")
+            st.markdown("**Conclusion:** " + com["conclusion"])
+with tabs[7]:
+    st.markdown("Copy this into `config/quarterly_config.yaml` (replace the `macro_themes:` list and the "
+                "`forecast:` section) to make these settings the defaults for `forecast.py` and the Word report.")
+    out = {k: v for k, v in f.items() if k not in ("enabled",)}
+    text = yaml.safe_dump({"macro_themes": cfg.get("macro_themes", []),
+                           "forecast": {"enabled": fbase.get("enabled", True), **out}},
+                          sort_keys=False, allow_unicode=True)
+    st.code(text, language="yaml")
+    st.download_button("Download forecast settings (YAML)", text.encode(), "forecast_settings.yaml", "text/yaml")
+
