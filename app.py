@@ -10,6 +10,10 @@ by `python forecast.py` (output/forecast/monthly_dataset.csv).
 
 from __future__ import annotations
 
+import warnings
+
+warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL")
+
 import copy
 import json
 import sys
@@ -412,15 +416,15 @@ def policy_chart(col: str, label: str) -> go.Figure:
 tabs = st.tabs(["US 10Y", "Canada 10Y", "Decomposition", "Policy paths", "Tables", "Backtest",
                 "PDF report", "Export config", "Macro drivers"])
 with tabs[0]:
-    st.plotly_chart(fan_chart("us_10y", "US 10Y Treasury"), width="stretch", theme="streamlit")
+    st.plotly_chart(fan_chart("us_10y", "US 10Y Treasury"), theme="streamlit")
 with tabs[1]:
-    st.plotly_chart(fan_chart("canada_10y", "Canada 10Y GoC"), width="stretch", theme="streamlit")
+    st.plotly_chart(fan_chart("canada_10y", "Canada 10Y GoC"), theme="streamlit")
     beta = res.params.get("beta_ca_us_36m")
     st.caption(f"Canada–US spread at {end_label}: **{res.central['ca_spread'].iloc[-1]:+.2f} pp** "
                f"(now {res.central['ca_spread'].iloc[0]:+.2f}) · 36-month US→Canada yield beta: "
                f"**{beta:.2f}**" if beta is not None else "")
 with tabs[2]:
-    st.plotly_chart(decomposition_chart(), width="stretch", theme="streamlit")
+    st.plotly_chart(decomposition_chart(), theme="streamlit")
     e = res.central.iloc[[0, -1]][["us_expectations", "us_basis", "us_tp", "us_overlay", "us_10y"]].T
     e.columns = ["Now", end_label]
     e["Change (bps)"] = (e[end_label] - e["Now"]) * 100
@@ -430,8 +434,8 @@ with tabs[2]:
                  width="stretch")
 with tabs[3]:
     a, b = st.columns(2)
-    a.plotly_chart(policy_chart("fed_funds", "Fed funds rate"), width="stretch", theme="streamlit")
-    b.plotly_chart(policy_chart("boc_rate", "BoC overnight rate"), width="stretch", theme="streamlit")
+    a.plotly_chart(policy_chart("fed_funds", "Fed funds rate"), theme="streamlit")
+    b.plotly_chart(policy_chart("boc_rate", "BoC overnight rate"), theme="streamlit")
 with tabs[4]:
     q = res.quarterly
     show = ["fed_funds", "us_10y", "us_10y_p10", "us_10y_p90", "boc_rate", "canada_10y",
@@ -461,7 +465,7 @@ with tabs[5]:
         fig.add_hline(y=1.0, line=dict(color=MUTED, dash="dot"), annotation_text="random walk = 1")
         fig.update_layout(barmode="group")
         st.plotly_chart(base_layout(fig, "RMSE relative to random walk (lower is better)", 360)
-                        .update_yaxes(title="RMSE / RW RMSE"), width="stretch", theme="streamlit")
+                        .update_yaxes(title="RMSE / RW RMSE"), theme="streamlit")
         st.dataframe(sub.drop(columns="target").style.format(
             {"rmse": "{:.3f}", "mae": "{:.3f}", "bias": "{:+.3f}", "rmse_vs_rw": "{:.3f}",
              "hit_rate": "{:.2f}", "dm_pvalue_vs_rw": "{:.2f}"}), width="stretch", hide_index=True)
@@ -497,7 +501,7 @@ with tabs[8]:
         fig.update_layout(showlegend=False, hovermode="closest", margin=dict(l=10, r=30, t=50, b=30))
         fig.update_xaxes(title="bps", range=[-lim, lim], zeroline=False)
         fig.update_yaxes(title="")
-        st.plotly_chart(fig, width="stretch", theme="streamlit")
+        st.plotly_chart(fig, theme="streamlit")
         st.caption("Pairs: blue = expectations vs term premium · orange = real yield vs breakeven · "
                    "green = 2Y vs 2s10s slope.")
         ctx_rows = [{"Indicator": k, "Change": f"{v['change']:+.1f} {v['unit']}", "Level now": f"{v['level']:.2f}"}
@@ -522,7 +526,7 @@ with tabs[8]:
                                  line=dict(color=INK, width=1.6), hovertemplate="%{y:.2f}%"))
         fig.add_trace(go.Scatter(x=fitted.index, y=fitted, name="Fiscal fair value (fitted)",
                                  line=dict(color=SLOTS[1], width=2), hovertemplate="%{y:.2f}%"))
-        st.plotly_chart(base_layout(fig, "Term premium vs fiscal fair value", 340), width="stretch", theme="streamlit")
+        st.plotly_chart(base_layout(fig, "Term premium vs fiscal fair value", 340), theme="streamlit")
         coef_rows = [{"Driver": DRIVER_LABELS.get(c, c), "Latest": f"{tp_fit['latest_drivers'][c]:.1f}",
                       "TP sensitivity (bps per unit)": f"{tp_fit['coef'][c] * 100:+.2f}"}
                      for c in tp_fit["drivers"]]

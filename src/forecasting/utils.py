@@ -29,9 +29,15 @@ def horizon_index(last_obs: pd.Timestamp, horizon: int) -> pd.DatetimeIndex:
 
 
 def ols(y: np.ndarray, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Least squares; returns (coefficients, residuals)."""
-    coef, *_ = np.linalg.lstsq(X, y, rcond=None)
-    return coef, y - X @ coef
+    """Least squares; returns (coefficients, residuals).
+
+    np.errstate silences spurious matmul warnings from macOS Accelerate BLAS (NumPy 2.x);
+    callers that need it check the coefficients for finiteness.
+    """
+    with np.errstate(all="ignore"):
+        coef, *_ = np.linalg.lstsq(X, y, rcond=None)
+        resid = y - X @ coef
+    return coef, resid
 
 
 def fit_ar1(series: pd.Series) -> dict:

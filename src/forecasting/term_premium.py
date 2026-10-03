@@ -51,16 +51,25 @@ def drivers_frame(df: pd.DataFrame) -> pd.DataFrame:
 
 def fit_tp_regression(df: pd.DataFrame, min_obs: int = 60) -> dict:
     """OLS of the term premium on available fiscal / uncertainty drivers."""
-    X = drivers_frame(df)
-    cols = [c for c in DRIVERS if c in X and X[c].notna().sum() >= min_obs]
-    data = pd.concat([df["us_tp"], X[cols]], axis=1).dropna()
+    X = drivers_frame(df).replace([np.inf, -np.inf], np.nan)
+    cols = [c for c in DRIVERS if c in X and X[c].notna().sum() >= min_obs and X[c].std() > 1e-9]
+    data = pd.concat([df["us_tp"], X[cols]], axis=1).replace([np.inf, -np.inf], np.nan).dropna()
     if not cols or len(data) < min_obs:
         raise ValueError("insufficient driver data for term-premium regression")
-    A = np.column_stack([np.ones(len(data)), data[cols].to_numpy()])
-    coef, resid = ols(data["us_tp"].to_numpy(), A)
-    fitted = pd.Series(A @ coef, index=data.index, name="tp_fair_value")
+    # Standardise drivers for a well-conditioned fit, then map back to per-unit coefficients
+    mu, sd = data[cols].mean(), data[cols].std()
+    Z = ((data[cols] - mu) / sd).to_numpy()
+    A = np.column_stack([np.ones(len(data)), Z])
+    zcoef, resid = ols(data["us_tp"].to_numpy(), A)
+    slopes = zcoef[1:] / sd.to_numpy()
+    const = zcoef[0] - float(np.sum(slopes * mu.to_numpy()))
+    coef = np.concatenate([[const], slopes])
+    if not np.all(np.isfinite(coef)):
+        raise ValueError("term-premium regression did not converge (non-finite coefficients)")
+    with np.errstate(all="ignore"):
+        fitted = pd.Series(A @ zcoef, index=data.index, name="tp_fair_value")
     latest = X[cols].dropna().iloc[-1]
-    fair_now = float(coef[0] + latest.to_numpy() @ coef[1:])
+    fair_now = float(const + np.sum(latest.to_numpy() * slopes))
     tp_now = float(df["us_tp"].dropna().iloc[-1])
     return {
         "drivers": cols,

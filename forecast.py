@@ -14,6 +14,9 @@ Subjective views (policy paths, probabilities, term premium, overlays) live in t
 
 import argparse
 import logging
+import warnings
+
+warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL")
 import sys
 from pathlib import Path
 
