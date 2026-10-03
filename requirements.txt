@@ -10,6 +10,6 @@ python-dotenv>=1.0.0
 openpyxl>=3.1.0     # Excel export of forecast tables
 xlrd>=2.0.1         # read NY Fed ACM term premium (.xls)
 pytest>=7.0         # tests
-streamlit>=1.37     # interactive app (app.py)
+streamlit>=1.50     # interactive app (app.py)
 plotly>=5.20
 reportlab>=4.0      # PDF brief (src/brief_report.py)

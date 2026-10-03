@@ -139,7 +139,7 @@ data_key = f"{data_path}|{synthetic}|{df.index[-1]}|{len(df)}"
 if synthetic:
     st.warning("Synthetic demo data — numbers are NOT real market data.", icon="⚠️")
 
-if st.sidebar.button("↺ Reset all inputs to config", use_container_width=True):
+if st.sidebar.button("↺ Reset all inputs to config", width="stretch"):
     for k in list(st.session_state.keys()):
         del st.session_state[k]
     st.rerun()
@@ -231,7 +231,7 @@ with c1:
         "TP target (%)": [float(s.get("term_premium_target", np.nan)) for s in scen_cfg],
     }, index=pd.Index([s["name"] for s in scen_cfg], name="scenario"))
     meta = st.data_editor(
-        meta, key="meta", use_container_width=True,
+        meta, key="meta", width="stretch",
         column_config={
             "probability": st.column_config.NumberColumn(min_value=0.0, max_value=1.0, step=0.01, format="%.2f"),
             "TP target (%)": st.column_config.NumberColumn(
@@ -247,13 +247,13 @@ c2, c3 = st.columns(2)
 with c2:
     st.markdown("**Fed funds path (% at period end)**")
     fed_in = anchors_to_frame(scen_cfg, "fed_funds").astype(float)
-    fed_tbl = st.data_editor(fed_in, key="fed", num_rows="dynamic", use_container_width=True,
+    fed_tbl = st.data_editor(fed_in, key="fed", num_rows="dynamic", width="stretch",
                              column_config=rate_columns(fed_in))
     st.caption(f"Latest: **{df['fed_funds'].iloc[-1]:.2f}%** · periods like 2027Q2 or 2027-06")
 with c3:
     st.markdown("**BoC overnight path (% at period end)**")
     boc_in = anchors_to_frame(scen_cfg, "boc_rate").astype(float)
-    boc_tbl = st.data_editor(boc_in, key="boc", num_rows="dynamic", use_container_width=True,
+    boc_tbl = st.data_editor(boc_in, key="boc", num_rows="dynamic", width="stretch",
                              column_config=rate_columns(boc_in))
     st.caption(f"Latest: **{df['boc_rate'].iloc[-1]:.2f}%** · blank column = model BoC path")
 
@@ -373,35 +373,35 @@ def policy_chart(col: str, label: str) -> go.Figure:
 tabs = st.tabs(["US 10Y", "Canada 10Y", "Decomposition", "Policy paths", "Tables", "Backtest",
                 "PDF report", "Export config"])
 with tabs[0]:
-    st.plotly_chart(fan_chart("us_10y", "US 10Y Treasury"), use_container_width=True, theme="streamlit")
+    st.plotly_chart(fan_chart("us_10y", "US 10Y Treasury"), width="stretch", theme="streamlit")
 with tabs[1]:
-    st.plotly_chart(fan_chart("canada_10y", "Canada 10Y GoC"), use_container_width=True, theme="streamlit")
+    st.plotly_chart(fan_chart("canada_10y", "Canada 10Y GoC"), width="stretch", theme="streamlit")
     beta = res.params.get("beta_ca_us_36m")
     st.caption(f"Canada–US spread at {end_label}: **{res.central['ca_spread'].iloc[-1]:+.2f} pp** "
                f"(now {res.central['ca_spread'].iloc[0]:+.2f}) · 36-month US→Canada yield beta: "
                f"**{beta:.2f}**" if beta is not None else "")
 with tabs[2]:
-    st.plotly_chart(decomposition_chart(), use_container_width=True, theme="streamlit")
+    st.plotly_chart(decomposition_chart(), width="stretch", theme="streamlit")
     e = res.central.iloc[[0, -1]][["us_expectations", "us_basis", "us_tp", "us_overlay", "us_10y"]].T
     e.columns = ["Now", end_label]
     e["Change (bps)"] = (e[end_label] - e["Now"]) * 100
     st.dataframe(e.rename(index={"us_expectations": "Expected avg short rate", "us_basis": "Market-vs-neutral gap",
                                  "us_tp": "Term premium", "us_overlay": "Overlay", "us_10y": "US 10Y"})
                  .style.format({"Now": "{:.2f}", end_label: "{:.2f}", "Change (bps)": "{:+.0f}"}),
-                 use_container_width=True)
+                 width="stretch")
 with tabs[3]:
     a, b = st.columns(2)
-    a.plotly_chart(policy_chart("fed_funds", "Fed funds rate"), use_container_width=True, theme="streamlit")
-    b.plotly_chart(policy_chart("boc_rate", "BoC overnight rate"), use_container_width=True, theme="streamlit")
+    a.plotly_chart(policy_chart("fed_funds", "Fed funds rate"), width="stretch", theme="streamlit")
+    b.plotly_chart(policy_chart("boc_rate", "BoC overnight rate"), width="stretch", theme="streamlit")
 with tabs[4]:
     q = res.quarterly
     show = ["fed_funds", "us_10y", "us_10y_p10", "us_10y_p90", "boc_rate", "canada_10y",
             "canada_10y_p10", "canada_10y_p90", "us_tp", "ca_spread"]
     st.markdown("**Quarterly averages (%)**")
-    st.dataframe(q[show].style.format("{:.2f}"), use_container_width=True)
+    st.dataframe(q[show].style.format("{:.2f}"), width="stretch")
     st.download_button("Download quarterly CSV", q.to_csv().encode(), "forecast_quarterly.csv", "text/csv")
     st.markdown("**By scenario (quarterly averages, %)**")
-    st.dataframe(q[[c for c in q.columns if "[" in c]].style.format("{:.2f}"), use_container_width=True)
+    st.dataframe(q[[c for c in q.columns if "[" in c]].style.format("{:.2f}"), width="stretch")
     with st.expander("Model parameters (estimated / used)"):
         st.json(json.loads(json.dumps(res.params, default=float)))
 with tabs[5]:
@@ -422,10 +422,10 @@ with tabs[5]:
         fig.add_hline(y=1.0, line=dict(color=MUTED, dash="dot"), annotation_text="random walk = 1")
         fig.update_layout(barmode="group")
         st.plotly_chart(base_layout(fig, "RMSE relative to random walk (lower is better)", 360)
-                        .update_yaxes(title="RMSE / RW RMSE"), use_container_width=True, theme="streamlit")
+                        .update_yaxes(title="RMSE / RW RMSE"), width="stretch", theme="streamlit")
         st.dataframe(sub.drop(columns="target").style.format(
             {"rmse": "{:.3f}", "mae": "{:.3f}", "bias": "{:+.3f}", "rmse_vs_rw": "{:.3f}",
-             "hit_rate": "{:.2f}", "dm_pvalue_vs_rw": "{:.2f}"}), use_container_width=True, hide_index=True)
+             "hit_rate": "{:.2f}", "dm_pvalue_vs_rw": "{:.2f}"}), width="stretch", hide_index=True)
 with tabs[6]:
     import os
 
