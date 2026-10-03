@@ -16,6 +16,7 @@ warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL")
 
 import copy
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -46,6 +47,8 @@ SLOTS_LIGHT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300",
 SLOTS_DARK = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"]
 
 st.set_page_config(page_title="10Y Forecast Lab", page_icon="📈", layout="wide")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-7s %(name)s: %(message)s",
+                    datefmt="%H:%M:%S")  # research progress shows in the terminal
 
 
 # ------------------------------------------------------------------------------ theme
@@ -543,7 +546,8 @@ with tabs[8]:
                "the final list feeds the PDF / Word commentary.")
     import os as _os
 
-    from macro_research import MODEL as R_MODEL, load_latest_research, research_macro_themes, save_research
+    from macro_research import (MODEL as R_MODEL, ResearchError, load_latest_research,
+                                research_macro_themes, save_research)
 
     research_dir = ROOT / "output" / "forecast"
     if "research" not in st.session_state:
@@ -555,13 +559,18 @@ with tabs[8]:
                   help=f"{R_MODEL} + web search; takes 1–3 minutes and uses API credits"):
         with st.spinner("Searching the news and drafting cited themes (1–3 min)…"):
             try:
-                r = research_macro_themes(att_q, cfg)
+                r = research_macro_themes(att_q, cfg, log_dir=research_dir / "logs")
                 save_research(r, research_dir)
                 st.session_state["research"] = r
                 for k in [k for k in st.session_state if str(k).startswith(("th_", "inc_"))]:
                     del st.session_state[k]
-            except Exception as exc:
+            except ResearchError as exc:
                 st.error(f"Research failed: {exc}")
+                if exc.diagnostics:
+                    with st.expander("Diagnostics", expanded=True):
+                        st.json(exc.diagnostics)
+                if exc.log_path:
+                    st.caption(f"Full log (search queries, raw tool results): `{exc.log_path}`")
     if not key_ok:
         rc2.caption("Add ANTHROPIC_API_KEY to `.env` to enable research. You can still type themes below.")
 
@@ -571,6 +580,10 @@ with tabs[8]:
         rc2.caption(f"Research for **{r.get('period')}** · generated {r.get('generated')} · {r.get('model')} · "
                     f"{len(r.get('sources', []))} sources · {r.get('dropped_unsourced', 0)} unsourced theme(s) dropped")
         st.info(r.get("quarter_summary", ""))
+        if r.get("diagnostics"):
+            d = r["diagnostics"]
+            st.caption(f"{len(d.get('searches', []))} searches · {d.get('results_returned', 0)} results · "
+                       f"{d.get('text_citations', 0)} inline citations · log: `{r.get('log_path')}`")
         for i, t in enumerate(r.get("themes", [])):
             with st.container(border=True):
                 cc1, cc2 = st.columns([0.07, 0.93])

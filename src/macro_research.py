@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+from datetime import datetime
 from datetime import date
 from pathlib import Path
 
@@ -33,7 +35,8 @@ US 10-year Treasury yield (and Canada 10-year) during the stated period. Cover: 
 communication, inflation data and energy prices, fiscal deficits / debt / Treasury issuance and
 auctions, Fed independence and political pressure, geopolitics, growth and labour data, and the Bank
 of Canada. Only state facts you found in search results, and say so when you could not verify
-something. Do not speculate or fill gaps from memory. Write concise research notes."""
+something. Do not speculate or fill gaps from memory. Write concise research notes as bullet
+points, and end every bullet with the URL(s) of the page(s) it comes from in parentheses."""
 
 STRUCTURE_SYSTEM = """You turn cited research notes into macro themes for a bond-yield report. Use ONLY
 information present in the notes. Every theme must list the source numbers [n] from the notes that
@@ -81,33 +84,120 @@ def _research_prompt(att: dict, config: dict) -> str:
             "over the next two years.")
 
 
+def _get(obj, name, default=None):
+    return obj.get(name, default) if isinstance(obj, dict) else getattr(obj, name, default)
+
+
+class _Sources:
+    """Registry of pages actually retrieved by the server tools (the only citable sources)."""
+
+    def __init__(self):
+        self.items: list[dict] = []
+        self.index: dict[str, int] = {}
+
+    def add(self, url, title="", quote="") -> int | None:
+        if not url:
+            return None
+        url = str(url).rstrip(").,;")
+        if url not in self.index:
+            self.items.append({"id": len(self.items) + 1, "url": url, "title": title or url,
+                               "quote": (quote or "")[:300]})
+            self.index[url] = len(self.items)
+        elif quote and not self.items[self.index[url] - 1]["quote"]:
+            self.items[self.index[url] - 1]["quote"] = quote[:300]
+        return self.index[url]
+
+
+URL_RE = re.compile(r"https?://[^\s)\]>\"']+")
+
+
 def _notes_and_sources(content) -> tuple[str, list[dict]]:
-    """Concatenate text blocks, tagging each cited passage with [n] and collecting the sources."""
-    sources: list[dict] = []
-    index: dict[str, int] = {}
+    """
+    Collect sources from (a) text-block citations, (b) web_search_tool_result result lists,
+    (c) web_fetch_tool_result documents — i.e. only pages the tools really returned — and tag the
+    notes with [n]: from citations, and from URLs written in the text that match a retrieved page.
+    """
+    reg = _Sources()
+    for block in content:
+        btype = _get(block, "type")
+        if btype == "web_search_tool_result":
+            res = _get(block, "content")
+            if isinstance(res, list):
+                for r in res:
+                    reg.add(_get(r, "url"), _get(r, "title", ""))
+        elif btype == "web_fetch_tool_result":
+            res = _get(block, "content")
+            reg.add(_get(res, "url"), _get(_get(res, "content"), "title", "") if res is not None else "")
     parts: list[str] = []
     for block in content:
-        if getattr(block, "type", None) != "text":
+        if _get(block, "type") != "text":
             continue
-        tags = []
-        for c in getattr(block, "citations", None) or []:
-            url = getattr(c, "url", None)
-            if not url:
-                continue
-            if url not in index:
-                sources.append({"id": len(sources) + 1, "url": url, "title": getattr(c, "title", "") or url,
-                                "quote": (getattr(c, "cited_text", "") or "")[:300]})
-                index[url] = len(sources)
-            tags.append(index[url])
-        tag = (" " + "".join(f"[{n}]" for n in sorted(set(tags)))) if tags else ""
-        parts.append(block.text + tag)
-    return "".join(parts).strip(), sources
+        tags = set()
+        for c in _get(block, "citations") or []:
+            n = reg.add(_get(c, "url"), _get(c, "title", ""), _get(c, "cited_text", ""))
+            if n:
+                tags.add(n)
+        text = _get(block, "text", "")
+        for url in URL_RE.findall(text):
+            n = reg.index.get(url.rstrip(").,;"))
+            if n:
+                tags.add(n)
+        parts.append(text + ((" " + "".join(f"[{n}]" for n in sorted(tags))) if tags else ""))
+    return "".join(parts).strip(), reg.items
+
+
+def diagnose(content, stop_reasons: list[str]) -> dict:
+    """What happened during the research turn — saved to the log and shown on failure."""
+    counts: dict[str, int] = {}
+    queries, errors, n_results, n_citations = [], [], 0, 0
+    for block in content:
+        t = _get(block, "type", "?")
+        counts[t] = counts.get(t, 0) + 1
+        if t == "server_tool_use":
+            inp = _get(block, "input") or {}
+            q = _get(inp, "query") or _get(inp, "url")
+            if q:
+                queries.append(f"{_get(block, 'name')}: {q}")
+        elif t in ("web_search_tool_result", "web_fetch_tool_result"):
+            res = _get(block, "content")
+            if isinstance(res, list):
+                n_results += len(res)
+            elif _get(res, "error_code"):
+                errors.append(f"{t}: {_get(res, 'error_code')}")
+            elif res is not None:
+                n_results += 1
+        elif t == "text":
+            n_citations += len(_get(block, "citations") or [])
+    return {"stop_reasons": stop_reasons, "block_counts": counts, "searches": queries,
+            "tool_errors": errors, "results_returned": n_results, "text_citations": n_citations}
+
+
+def _dump(block):
+    """JSON-safe dump of a content block without the large encrypted fields."""
+    d = block.model_dump() if hasattr(block, "model_dump") else (
+        dict(block) if isinstance(block, dict) else dict(vars(block)))
+
+    def strip(x):
+        if isinstance(x, dict):
+            return {k: strip(v) for k, v in x.items() if "encrypted" not in k}
+        if isinstance(x, list):
+            return [strip(v) for v in x]
+        return x if isinstance(x, (str, int, float, bool, type(None))) else str(x)
+    return strip(d)
+
+
+class ResearchError(RuntimeError):
+    def __init__(self, msg: str, diagnostics: dict | None = None, log_path: str | None = None):
+        super().__init__(msg)
+        self.diagnostics = diagnostics or {}
+        self.log_path = log_path
 
 
 def _run_research(client, prompt: str):
     """Web-search turn with pause_turn continuation. Returns the final assistant content."""
     messages = [{"role": "user", "content": prompt}]
     acc: list = []
+    stops: list[str] = []
     for _ in range(MAX_CONTINUATIONS + 1):
         with client.beta.messages.stream(
             model=MODEL, max_tokens=32000,
@@ -116,14 +206,16 @@ def _run_research(client, prompt: str):
             system=RESEARCH_SYSTEM, tools=[WEB_SEARCH], messages=messages,
         ) as stream:
             resp = stream.get_final_message()
+        stops.append(str(resp.stop_reason))
+        logger.info("Research turn: stop_reason=%s, %d blocks", resp.stop_reason, len(resp.content))
         if resp.stop_reason == "refusal":
-            raise RuntimeError("Claude declined the research request")
+            raise ResearchError("Claude declined the research request", {"stop_reasons": stops})
         acc += list(resp.content)
         if resp.stop_reason != "pause_turn":
-            return acc
+            return acc, stops
         # Resume the paused server-tool turn: resend the assistant content, no extra user message
         messages = [{"role": "user", "content": prompt}, {"role": "assistant", "content": acc}]
-    return acc
+    return acc, stops
 
 
 def validate_themes(raw: dict, sources: list[dict]) -> dict:
@@ -140,35 +232,77 @@ def validate_themes(raw: dict, sources: list[dict]) -> dict:
 
 
 # --------------------------------------------------------------------------- main entry
-def research_macro_themes(att: dict, config: dict, api_key: str | None = None) -> dict:
-    """Run the two-step research. Raises on API errors (the app shows them)."""
+def research_macro_themes(att: dict, config: dict, api_key: str | None = None,
+                          log_dir=None) -> dict:
+    """
+    Run the two-step research. Every run writes a log (search queries, tool errors, sources,
+    notes, raw blocks) to <log_dir>/macro_research_<timestamp>.json. Raises ResearchError with
+    diagnostics on failure.
+    """
     key = api_key or config.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY")
     if not key:
-        raise RuntimeError("ANTHROPIC_API_KEY not set — add it to .env")
+        raise ResearchError("ANTHROPIC_API_KEY not set — add it to .env")
     client = _client(key)
+    log: dict = {"started": datetime.now().isoformat(timespec="seconds"), "model": MODEL,
+                 "tool": WEB_SEARCH, "period": f"{att.get('start')} – {att.get('end')}"}
+    log_path = None
+    if log_dir is not None:
+        log_path = Path(log_dir) / f"macro_research_{datetime.now():%Y%m%d-%H%M%S}.json"
 
-    content = _run_research(client, _research_prompt(att, config))
-    notes, sources = _notes_and_sources(content)
-    if not sources:
-        raise RuntimeError("Web search returned no citable sources — nothing to base themes on")
+    def write_log():
+        if log_path:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(json.dumps(log, indent=2, ensure_ascii=False, default=str))
+            logger.info("Research log: %s", log_path)
 
-    src_list = "\n".join(f"[{s['id']}] {s['title']} — {s['url']}" for s in sources)
-    resp = client.beta.messages.create(
-        model=MODEL, max_tokens=16000,
-        betas=["server-side-fallback-2026-07-01"], fallbacks="default",
-        output_config={"effort": "medium", "format": {"type": "json_schema", "schema": THEMES_SCHEMA}},
-        system=STRUCTURE_SYSTEM,
-        messages=[{"role": "user", "content":
-                   f"Research notes (with source numbers):\n\n{notes}\n\nSources:\n{src_list}\n\n"
-                   "Produce 4-6 themes for the period, most important first."}],
-    )
-    if resp.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to structure the themes")
-    raw = json.loads(next(b.text for b in resp.content if b.type == "text"))
-    out = validate_themes(raw, sources)
-    out.update({"period": f"{att['start']} – {att['end']}", "generated": date.today().isoformat(),
-                "model": MODEL, "sources": sources, "notes": notes})
-    return out
+    try:
+        content, stops = _run_research(client, _research_prompt(att, config))
+        diag = diagnose(content, stops)
+        notes, sources = _notes_and_sources(content)
+        log.update({"diagnostics": diag, "notes": notes, "sources": sources,
+                    "raw_blocks": [_dump(b) for b in content]})
+        logger.info("Research: %d searches, %d results, %d citations, %d sources, errors=%s",
+                    len(diag["searches"]), diag["results_returned"], diag["text_citations"],
+                    len(sources), diag["tool_errors"])
+        if not sources:
+            hint = ("web search returned errors: " + ", ".join(diag["tool_errors"]) if diag["tool_errors"]
+                    else "Claude did not run any web search" if not diag["searches"]
+                    else "searches ran but no result pages could be identified")
+            raise ResearchError(f"No citable sources ({hint})", diag, str(log_path) if log_path else None)
+
+        src_list = "\n".join(f"[{s_['id']}] {s_['title']} — {s_['url']}" for s_ in sources)
+        resp = client.beta.messages.create(
+            model=MODEL, max_tokens=16000,
+            betas=["server-side-fallback-2026-07-01"], fallbacks="default",
+            output_config={"effort": "medium", "format": {"type": "json_schema", "schema": THEMES_SCHEMA}},
+            system=STRUCTURE_SYSTEM,
+            messages=[{"role": "user", "content":
+                       f"Research notes (with source numbers where known):\n\n{notes}\n\n"
+                       f"Retrieved sources (cite by number):\n{src_list}\n\n"
+                       "Produce 4-6 themes for the period, most important first. Cite the source "
+                       "numbers each theme relies on."}],
+        )
+        if resp.stop_reason == "refusal":
+            raise ResearchError("Claude declined to structure the themes", diag,
+                                str(log_path) if log_path else None)
+        raw = json.loads(next(b.text for b in resp.content if b.type == "text"))
+        log["structured_raw"] = raw
+        out = validate_themes(raw, sources)
+        out.update({"period": f"{att['start']} – {att['end']}", "generated": date.today().isoformat(),
+                    "model": MODEL, "sources": sources, "notes": notes, "diagnostics": diag,
+                    "log_path": str(log_path) if log_path else None})
+        log["result"] = {k: v for k, v in out.items() if k not in ("notes", "sources")}
+        return out
+    except ResearchError as exc:
+        log["error"] = str(exc)
+        exc.log_path = exc.log_path or (str(log_path) if log_path else None)
+        raise
+    except Exception as exc:
+        log["error"] = f"{type(exc).__name__}: {exc}"
+        raise ResearchError(f"{type(exc).__name__}: {exc}", log.get("diagnostics"),
+                            str(log_path) if log_path else None) from exc
+    finally:
+        write_log()
 
 
 def save_research(result: dict, out_dir) -> Path:

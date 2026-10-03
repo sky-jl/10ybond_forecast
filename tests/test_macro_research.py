@@ -101,3 +101,50 @@ def test_save_and_load(tmp_path):
     r = {"generated": "2026-10-03", "themes": [], "sources": []}
     mr.save_research(r, tmp_path)
     assert mr.load_latest_research(tmp_path)["generated"] == "2026-10-03"
+
+
+def _search_result(url, title):
+    return types.SimpleNamespace(type="web_search_result", url=url, title=title)
+
+
+def test_sources_from_search_results_without_citations(monkeypatch, monthly, config, tmp_path):
+    """Dynamic filtering may return text without citations: use the retrieved result pages."""
+    content = [
+        types.SimpleNamespace(type="server_tool_use", name="web_search", input={"query": "10y treasury Q3"}),
+        types.SimpleNamespace(type="web_search_tool_result",
+                              content=[_search_result("https://example.com/a", "A"),
+                                       _search_result("https://example.com/b", "B")]),
+        _text("- Auctions tailed (https://example.com/a)\n- Made-up claim (https://fake.example/x)"),
+    ]
+    notes, sources = mr._notes_and_sources(content)
+    assert [s["url"] for s in sources] == ["https://example.com/a", "https://example.com/b"]
+    assert "[1]" in notes and "fake.example" not in [s["url"] for s in sources]
+    d = mr.diagnose(content, ["end_turn"])
+    assert d["searches"] == ["web_search: 10y treasury Q3"] and d["results_returned"] == 2
+
+
+def test_failure_writes_log_and_diagnostics(monkeypatch, monthly, config, tmp_path):
+    err = types.SimpleNamespace(type="web_search_tool_result",
+                                content=types.SimpleNamespace(type="web_search_tool_result_error",
+                                                              error_code="unavailable"))
+    msg = types.SimpleNamespace(stop_reason="end_turn", content=[
+        types.SimpleNamespace(type="server_tool_use", name="web_search", input={"query": "q"}), err,
+        _text("Could not verify anything.")])
+
+    class Messages:
+        def stream(self, **kw):
+            return _Stream(msg)
+
+    class Client:
+        def __init__(self, **_):
+            self.beta = types.SimpleNamespace(messages=Messages())
+
+    mod = types.ModuleType("anthropic")
+    mod.Anthropic = Client
+    monkeypatch.setitem(sys.modules, "anthropic", mod)
+    with pytest.raises(mr.ResearchError) as ei:
+        mr.research_macro_themes(attribute(monthly), config, api_key="k", log_dir=tmp_path)
+    assert "unavailable" in str(ei.value)
+    assert ei.value.diagnostics["tool_errors"] == ["web_search_tool_result: unavailable"]
+    log = json.loads(open(ei.value.log_path).read())
+    assert log["error"] and log["diagnostics"]["searches"] == ["web_search: q"]
